@@ -1,0 +1,29 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="smart-task-manager",
+    version="0.1.0",
+    packages=find_packages(),
+    install_requires=[
+        "fastapi>=0.104.0",
+        "uvicorn[standard]>=0.24.0",
+        "pydantic>=2.4.0",
+        "click>=8.1.0",
+        "rich>=13.6.0",
+        "textual>=0.40.0",
+        "requests>=2.31.0",
+        "python-dateutil>=2.8.2",
+        "pyyaml>=6.0.1",
+        "schedule>=1.2.0",
+        "websockets>=12.0",
+    ],
+    entry_points={
+        "console_scripts": [
+            "task=taskman.client.cli:cli",
+            "task-server=taskman.server.main:start_server",
+        ],
+    },
+    author="Task Manager Team",
+    description="Smart Task Manager with Auto-Scheduling",
+    python_requires=">=3.11",
+)

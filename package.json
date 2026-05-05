@@ -1,0 +1,25 @@
+{
+  "name": "trackmind",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @trackmind/web dev",
+    "build": "pnpm run build:packages && pnpm run build:web",
+    "build:packages": "pnpm --filter @trackmind/core build && pnpm --filter @trackmind/storage build && pnpm --filter @trackmind/sync build",
+    "build:web": "pnpm --filter @trackmind/web build",
+    "build:functions": "pnpm --filter @trackmind/oauth-function build",
+    "test": "pnpm -r test",
+    "test:core": "pnpm --filter @trackmind/core test",
+    "test:storage": "pnpm --filter @trackmind/storage test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r exec -- rm -rf dist node_modules"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  }
+}

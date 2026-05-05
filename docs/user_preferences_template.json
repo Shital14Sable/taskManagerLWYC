@@ -1,0 +1,71 @@
+{
+  "user_id": "default",
+  "work_hours": {
+    "monday": { "start": "08:00", "end": "22:00" },
+    "tuesday": { "start": "08:00", "end": "22:00" },
+    "wednesday": { "start": "08:00", "end": "22:00" },
+    "thursday": { "start": "08:00", "end": "22:00" },
+    "friday": { "start": "08:00", "end": "22:00" },
+    "saturday": { "start": "08:00", "end": "22:00" },
+    "sunday": { "start": "10:00", "end": "24:00" }
+  },
+  "energy_patterns": {
+    "monday": [
+      { "start": "08:00", "end": "12:00", "level": "high" },
+      { "start": "12:00", "end": "17:00", "level": "medium" },
+      { "start": "17:00", "end": "22:00", "level": "high" }
+    ],
+    "tuesday": [
+      { "start": "08:00", "end": "12:00", "level": "high" },
+      { "start": "12:00", "end": "17:00", "level": "medium" },
+      { "start": "17:00", "end": "22:00", "level": "high" }
+    ],
+    "wednesday": [
+      { "start": "08:00", "end": "12:00", "level": "high" },
+      { "start": "12:00", "end": "17:00", "level": "medium" },
+      { "start": "17:00", "end": "22:00", "level": "high" }
+    ],
+    "thursday": [
+      { "start": "08:00", "end": "12:00", "level": "high" },
+      { "start": "12:00", "end": "17:00", "level": "medium" },
+      { "start": "17:00", "end": "22:00", "level": "high" }
+    ],
+    "friday": [
+      { "start": "08:00", "end": "12:00", "level": "high" },
+      { "start": "12:00", "end": "17:00", "level": "medium" },
+      { "start": "17:00", "end": "22:00", "level": "high" }
+    ],
+    "saturday": [
+      { "start": "08:00", "end": "12:00", "level": "high" },
+      { "start": "12:00", "end": "17:00", "level": "medium" },
+      { "start": "17:00", "end": "22:00", "level": "high" }
+    ],
+    "sunday": [
+      { "start": "10:00", "end": "15:00", "level": "medium" },
+      { "start": "15:00", "end": "20:00", "level": "medium" },
+      { "start": "20:00", "end": "24:00", "level": "low" }
+    ]
+  },
+  "default_breaks": [],
+  "task_defaults": {
+    "min_duration": 15,
+    "default_duration": 60,
+    "buffer_percentage": 10
+  },
+  "scheduling_preferences": {
+    "batch_similar_tasks": true,
+    "auto_reschedule_daily": true,
+    "days_to_schedule_ahead": 7,
+    "respect_energy_patterns": true,
+    "energy_match_bonus": 0.15,
+    "max_deep_work_stretch": 120
+  },
+  "display_preferences": {
+    "time_format": "24h",
+    "date_format": "YYYY-MM-DD",
+    "color_scheme": "dark",
+    "show_completed_tasks": false
+  },
+  "auto_reschedule_time": "22:00",
+  "auto_backup_time": "02:00"
+}
