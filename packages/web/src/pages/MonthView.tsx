@@ -178,17 +178,25 @@ function DayCell({ day, onClick, isSelected, cycleSeason }: {
     <button
       onClick={onClick}
       className={cn(
-        "h-24 p-2 border rounded-md text-left transition-all hover:bg-accent/50 hover:shadow-md relative overflow-hidden",
+        "h-24 p-2 border rounded-md text-left transition-all hover:shadow-md relative overflow-hidden",
         day.is_today && "ring-2 ring-primary",
-        day.is_weekend && "bg-muted/30",
         !day.has_schedule && "opacity-50",
-        isSelected && "ring-2 ring-primary shadow-lg bg-accent/30"
+        isSelected && "ring-2 ring-primary shadow-lg"
       )}
+      style={
+        isSelected
+          ? undefined
+          : cycleSeason
+            ? { backgroundColor: phaseFillColor[cycleSeason] }
+            : day.is_weekend
+              ? undefined
+              : undefined
+      }
     >
-      {/* Phase color strip at top */}
+      {/* Phase top accent stripe */}
       {cycleSeason && (
         <span
-          className="absolute top-0 left-0 right-0 h-[3px]"
+          className="absolute top-0 left-0 right-0 h-1"
           style={{ backgroundColor: phaseStripColor[cycleSeason] }}
         />
       )}
@@ -202,7 +210,7 @@ function DayCell({ day, onClick, isSelected, cycleSeason }: {
         </span>
         <div className="flex items-center gap-1">
           {cycleSeason && (
-            <span className="text-[11px] leading-none" title={phaseLabel[cycleSeason].short}>
+            <span className="text-sm leading-none" title={`${phaseLabel[cycleSeason].name} phase`}>
               {phaseLabel[cycleSeason].emoji}
             </span>
           )}

@@ -51,6 +51,22 @@ export interface MoodBlock {
 
 export type CycleSeason = 'winter' | 'spring' | 'summer' | 'autumn';
 
+export interface OfficeHoursDay {
+  enabled: boolean;
+  start: string;  // HH:MM
+  end: string;    // HH:MM
+}
+
+export interface OfficeHoursPreferences {
+  enabled: boolean;
+  // Standard per-weekday schedule (keys: 'monday' … 'sunday')
+  schedule: Record<string, OfficeHoursDay>;
+  // One-off date overrides: YYYY-MM-DD → custom hours or null (office closed that day)
+  date_overrides: Record<string, OfficeHoursDay | null>;
+  // ID of the project whose tasks are restricted to these hours
+  project_id: string | null;
+}
+
 export interface CyclePreferences {
   enabled: boolean;
   // History of period start dates (YYYY-MM-DD), sorted ascending; last entry = most recent period
@@ -84,6 +100,7 @@ export interface UserPreferences {
   sidebar?: SidebarPreferences;
   mood_blocks?: MoodBlock[];
   cycle?: CyclePreferences;
+  office_hours?: OfficeHoursPreferences;
 }
 
 export function createDefaultWorkHours(): Record<string, DayWorkHours> {

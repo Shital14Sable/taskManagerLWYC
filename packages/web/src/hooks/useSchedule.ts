@@ -2,7 +2,29 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import type { Schedule } from '@trackmind/core';
 import { Scheduler, createDefaultPreferences, toISODateString } from '@trackmind/core';
+import type { OfficeHoursDay, OfficeHoursPreferences } from '@trackmind/core';
 import { applyEffectiveEnergyToPrefs } from '@/utils/cycle';
+
+/** Return the office hours that apply for a given date, or null if office is closed. */
+function getOfficeHoursForDate(
+  date: Date,
+  officeHours: OfficeHoursPreferences,
+): OfficeHoursDay | null {
+  if (!officeHours.enabled) return null;
+
+  const dateStr = toISODateString(date);
+
+  // Date-specific override takes priority
+  if (Object.prototype.hasOwnProperty.call(officeHours.date_overrides, dateStr)) {
+    return officeHours.date_overrides[dateStr]; // may be null → office closed
+  }
+
+  // Fall back to the standard weekly schedule
+  const dayName = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][date.getDay()];
+  const dayConfig = officeHours.schedule[dayName];
+  if (!dayConfig?.enabled) return null;
+  return dayConfig;
+}
 
 export type UnscheduledReason =
   | 'paused'
@@ -281,13 +303,35 @@ export function useSchedule(date?: string) {
         // has arrived. This lets distributeCycleTasks() spread tasks across future
         // days by setting scheduled_for — each task becomes visible to the scheduler
         // only on the day it was assigned to.
-        const tasksForDate = activeTasks.filter(t => {
+        const baseTasksForDate = activeTasks.filter(t => {
           if (!t.scheduled_for) return true;
           // Hard-pinned tasks carry a full datetime; the scheduler handles them directly
           if (t.is_pinned && t.pin_type === 'hard') return true;
           // Soft date hints: only expose on/after the assigned date
           return t.scheduled_for.split('T')[0] <= targetDate;
         });
+
+        // Apply office-hours constraints.
+        // Tasks from the designated office project get time_window_start/end set so the
+        // scheduler only places them within the office window for that day.
+        // On days when the office is closed the tasks are withheld entirely.
+        const officeHours = effectivePrefs.office_hours;
+        const officeProjectId = officeHours?.project_id ?? null;
+        const officeWindowForDay = officeProjectId && officeHours
+          ? getOfficeHoursForDate(scheduleDate, officeHours)
+          : null;
+
+        const tasksForDate = baseTasksForDate
+          .filter(t => {
+            if (!officeProjectId || t.project_id !== officeProjectId) return true;
+            // Office task: only include when office is open today
+            return officeWindowForDay !== null;
+          })
+          .map(t => {
+            if (!officeProjectId || t.project_id !== officeProjectId || !officeWindowForDay) return t;
+            // Annotate with the office window so the scheduler hard-restricts the time
+            return { ...t, time_window_start: officeWindowForDay.start, time_window_end: officeWindowForDay.end };
+          });
 
         const generatedSchedule = scheduler.generateSchedule({
           targetDate,

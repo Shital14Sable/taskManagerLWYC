@@ -81,7 +81,7 @@ const energyIcons = {
 }
 
 export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSelectProject }: ProjectViewProps) {
-  const { projects, tasks: allTasks, saveProject, saveTask, deleteTask, preferences } = useApp()
+  const { projects, tasks: allTasks, saveProject, saveTask, deleteTask, preferences, schedules } = useApp()
   const { completeTask } = useTasks(projectId)
   const { getChildProjects, unpauseAllSubprojects } = useProjects()
   const [quickTaskTitle, setQuickTaskTitle] = useState('')
@@ -174,6 +174,20 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
     const paused = habits.filter(h => h.is_paused).length
     return { total, active, paused }
   }, [habits])
+
+  // Build a lookup: task_id → { date, startTime, endTime }
+  // Scans all loaded schedules so TaskRow can show "Scheduled: Mon Jun 10 · 9:00–10:00"
+  const taskScheduleMap = useMemo(() => {
+    const map = new Map<string, { date: string; startTime: string; endTime: string }>()
+    for (const [date, schedule] of schedules) {
+      for (const st of schedule.scheduled_tasks ?? []) {
+        if (!st.is_buffer && st.task_id) {
+          map.set(st.task_id, { date, startTime: st.start_time, endTime: st.end_time })
+        }
+      }
+    }
+    return map
+  }, [schedules])
 
   // Filter tasks for display
   const filteredTasks = useMemo(() => {
@@ -741,6 +755,7 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
                       key={task.id}
                       task={task}
                       subtasks={tasks.filter(t => t.parent_task_id === task.id)}
+                      scheduledEntry={taskScheduleMap.get(task.id)}
                       onComplete={handleCompleteTask}
                       onEdit={onEditTask}
                       onDelete={handleDeleteTask}
@@ -1076,20 +1091,60 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
 }
 
 // Task Row Component
+type ScheduledEntry = { date: string; startTime: string; endTime: string }
+
+function formatScheduleLabel(entry: ScheduledEntry | undefined, scheduledFor: string | null): string | null {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const tomorrow = new Date(today)
+  tomorrow.setDate(today.getDate() + 1)
+  const todayStr = today.toISOString().split('T')[0]
+  const tomorrowStr = tomorrow.toISOString().split('T')[0]
+
+  const fmt12 = (hhmm: string) => {
+    const [h, m] = hhmm.split(':').map(Number)
+    const ampm = h < 12 ? 'am' : 'pm'
+    const h12 = h % 12 || 12
+    return `${h12}:${String(m).padStart(2, '0')}${ampm}`
+  }
+
+  if (entry) {
+    const dayLabel =
+      entry.date === todayStr ? 'Today' :
+      entry.date === tomorrowStr ? 'Tomorrow' :
+      new Date(entry.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    return `${dayLabel} · ${fmt12(entry.startTime)}–${fmt12(entry.endTime)}`
+  }
+
+  if (scheduledFor) {
+    const d = scheduledFor.split('T')[0]
+    const dayLabel =
+      d === todayStr ? 'Today' :
+      d === tomorrowStr ? 'Tomorrow' :
+      new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    return `${dayLabel} (pending reschedule)`
+  }
+
+  return null
+}
+
 function TaskRow({
   task,
   subtasks,
+  scheduledEntry,
   onComplete,
   onEdit,
   onDelete,
 }: {
   task: Task
   subtasks: Task[]
+  scheduledEntry?: ScheduledEntry
   onComplete: (id: string) => void
   onEdit: (task: Task) => void
   onDelete: (id: string) => void
 }) {
   const isCompleted = task.status === 'completed'
+  const scheduleLabel = isCompleted ? null : formatScheduleLabel(scheduledEntry, task.scheduled_for ?? null)
 
   return (
     <div className={cn(
@@ -1138,6 +1193,15 @@ function TaskRow({
           <span className="flex items-center gap-0.5">
             {energyIcons[task.energy_level]}
           </span>
+          {scheduleLabel && (
+            <span className={cn(
+              "flex items-center gap-1",
+              scheduledEntry ? "text-primary" : "text-muted-foreground italic"
+            )}>
+              <Calendar className="h-3 w-3 shrink-0" />
+              {scheduleLabel}
+            </span>
+          )}
           {task.status === 'blocked' && (
             <Badge variant="destructive" className="text-xs">Blocked</Badge>
           )}

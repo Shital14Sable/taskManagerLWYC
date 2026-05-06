@@ -10,8 +10,16 @@ import { TaskDetailDialog } from '@/components/TaskDetailDialog'
 import { EmptyState, emptyStateConfigs } from '@/components/EmptyState'
 import { TodaySidebar } from '@/components/sidebar'
 import { useApp } from '@/context/AppContext'
+import { getCyclePhaseForDate } from '@/utils/cycle'
 import type { Schedule, Task, ScheduledTask, Project } from '@/types'
 import { cn } from '@/lib/utils'
+
+const phaseColors = {
+  winter: { text: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-500/20' },
+  spring: { text: 'text-green-400',  bg: 'bg-green-500/10',  border: 'border-green-500/20' },
+  summer: { text: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
+  autumn: { text: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20' },
+} as const
 
 // Inline editable actual time component for completed tasks
 function ActualTimeEditor({ task, estimatedMinutes }: { task: Task; estimatedMinutes: number }) {
@@ -132,6 +140,7 @@ export function TodayView({
   selectedDate,
   onDateChange,
 }: TodayViewProps) {
+  const { preferences } = useApp()
   const [editingHabit, setEditingHabit] = useState<Task | null>(null)
   const [instanceRefreshKey, setInstanceRefreshKey] = useState(0)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
@@ -159,6 +168,13 @@ export function TodayView({
   const selectedTask = selectedTaskId ? getTaskById(selectedTaskId) : null
   const selectedProject = selectedTask ? getProjectById(selectedTask.project_id) : null
   const isToday = currentDate === todayDateStr
+
+  // Cycle phase for the currently-viewed date
+  const cyclePhase = useMemo(() => {
+    if (!preferences?.cycle?.enabled) return null
+    const [y, m, d] = currentDate.split('-').map(Number)
+    return getCyclePhaseForDate(new Date(y, m - 1, d), preferences.cycle)
+  }, [preferences, currentDate])
 
   // Navigate to previous/next day
   const navigateDay = (direction: 'prev' | 'next') => {
@@ -537,6 +553,29 @@ export function TodayView({
                 </Button>
               )}
             </div>
+
+            {/* Cycle phase banner */}
+            {cyclePhase && (() => {
+              const c = phaseColors[cyclePhase.season]
+              return (
+                <div className={cn(
+                  'mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm',
+                  c.bg, c.border
+                )}>
+                  <span>{cyclePhase.emoji}</span>
+                  <span className={cn('font-medium', c.text)}>
+                    {cyclePhase.name}: {cyclePhase.phase}
+                  </span>
+                  {!cyclePhase.isOverride && cyclePhase.cycleDay > 0 && (
+                    <span className="text-muted-foreground text-xs">Day {cyclePhase.cycleDay}</span>
+                  )}
+                  <span className="text-muted-foreground text-xs">·</span>
+                  <span className="text-muted-foreground text-xs capitalize">{cyclePhase.energyLevel} energy</span>
+                  <span className="text-muted-foreground text-xs">·</span>
+                  <span className={cn('text-xs italic', c.text)}>{cyclePhase.invitation}</span>
+                </div>
+              )
+            })()}
           </div>
           <div className="flex items-center gap-3">
             {/* Schedule Filter Toggle */}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Clock, Save, Download, Upload, FileJson, Trash2, AlertTriangle, Github, Cloud, LogOut, RefreshCw, Mail, BookOpen, Rocket, Eye, Moon, X, Plus } from 'lucide-react'
+import { Settings, Clock, Save, Download, Upload, FileJson, Trash2, AlertTriangle, Github, Cloud, LogOut, RefreshCw, Mail, BookOpen, Rocket, Eye, Moon, X, Plus, Briefcase } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import type { UserPreferences } from '@trackmind/core'
+import type { UserPreferences, OfficeHoursDay } from '@trackmind/core'
 import { useApp } from '@/context/AppContext'
 import { useHelpMode } from '@/context/HelpModeContext'
 import { Documentation } from '@/components/Documentation'
@@ -91,6 +91,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
   const [clearing, setClearing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [newPeriodDate, setNewPeriodDate] = useState('')
+  const [newOverrideDate, setNewOverrideDate] = useState('')
 
   // Sync handlers with error display
   const handleSync = async () => {
@@ -519,6 +520,231 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Office Hours Card */}
+              {(() => {
+                const WEEKDAYS_OFFICE = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'] as const
+                const WEEKDAY_LABELS: Record<string, string> = {
+                  monday:'Mon', tuesday:'Tue', wednesday:'Wed', thursday:'Thu',
+                  friday:'Fri', saturday:'Sat', sunday:'Sun',
+                }
+
+                const oh = preferences.office_hours
+                const defaultSchedule: Record<string, OfficeHoursDay> = {
+                  monday:    { enabled: true,  start: '09:00', end: '17:00' },
+                  tuesday:   { enabled: true,  start: '09:00', end: '17:00' },
+                  wednesday: { enabled: true,  start: '09:00', end: '17:00' },
+                  thursday:  { enabled: true,  start: '09:00', end: '17:00' },
+                  friday:    { enabled: true,  start: '09:00', end: '17:00' },
+                  saturday:  { enabled: false, start: '09:00', end: '17:00' },
+                  sunday:    { enabled: false, start: '09:00', end: '17:00' },
+                }
+
+                const updateOH = (patch: Partial<typeof oh>) =>
+                  setPreferences({
+                    ...preferences,
+                    office_hours: {
+                      enabled: oh?.enabled ?? false,
+                      schedule: oh?.schedule ?? defaultSchedule,
+                      date_overrides: oh?.date_overrides ?? {},
+                      project_id: oh?.project_id ?? null,
+                      ...patch,
+                    },
+                  })
+
+                const updateDay = (day: string, patch: Partial<OfficeHoursDay>) =>
+                  updateOH({
+                    schedule: {
+                      ...(oh?.schedule ?? defaultSchedule),
+                      [day]: { ...(oh?.schedule?.[day] ?? defaultSchedule[day]), ...patch },
+                    },
+                  })
+
+                const addDateOverride = () => {
+                  if (!newOverrideDate) return
+                  updateOH({
+                    date_overrides: {
+                      ...(oh?.date_overrides ?? {}),
+                      [newOverrideDate]: { enabled: true, start: '09:00', end: '17:00' },
+                    },
+                  })
+                  setNewOverrideDate('')
+                }
+
+                const updateDateOverride = (date: string, patch: Partial<OfficeHoursDay> | null) => {
+                  const overrides = { ...(oh?.date_overrides ?? {}) }
+                  if (patch === null) { delete overrides[date] }
+                  else { overrides[date] = { ...(overrides[date] ?? { enabled: true, start: '09:00', end: '17:00' }), ...patch } }
+                  updateOH({ date_overrides: overrides })
+                }
+
+                const activeProjects = projects.filter(p => p.status === 'active')
+
+                return (
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Briefcase className="h-4 w-4" />
+                        Office / Work Hours
+                      </CardTitle>
+                      <CardDescription>
+                        Tasks from a designated project will only be scheduled within these hours and on enabled days.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+
+                      {/* Enable toggle */}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label className="text-sm font-medium">Enable office hours</Label>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Restricts one project's tasks to a fixed work-hours window
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={oh?.enabled ?? false}
+                          onClick={() => updateOH({ enabled: !(oh?.enabled ?? false) })}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${oh?.enabled ? 'bg-primary' : 'bg-input'}`}
+                        >
+                          <span className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${oh?.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                        </button>
+                      </div>
+
+                      {(oh?.enabled) && (
+                        <>
+                          {/* Project selector */}
+                          <div className="space-y-1.5">
+                            <Label className="text-sm">Office / Work project</Label>
+                            <Select
+                              value={oh?.project_id ?? 'none'}
+                              onValueChange={v => updateOH({ project_id: v === 'none' ? null : v })}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select a project…" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">None selected</SelectItem>
+                                {activeProjects.map(p => (
+                                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                              Tasks from this project are only scheduled within the office window below.
+                            </p>
+                          </div>
+
+                          {/* Per-day schedule */}
+                          <div className="space-y-2">
+                            <Label className="text-sm">Weekly schedule</Label>
+                            <div className="space-y-2">
+                              {WEEKDAYS_OFFICE.map(day => {
+                                const cfg = oh?.schedule?.[day] ?? defaultSchedule[day]
+                                return (
+                                  <div key={day} className="flex items-center gap-3">
+                                    {/* Enabled toggle */}
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={cfg.enabled}
+                                      onClick={() => updateDay(day, { enabled: !cfg.enabled })}
+                                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${cfg.enabled ? 'bg-primary' : 'bg-input'}`}
+                                    >
+                                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${cfg.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                    </button>
+                                    <span className={`text-sm w-8 shrink-0 ${cfg.enabled ? 'text-foreground' : 'text-muted-foreground'}`}>
+                                      {WEEKDAY_LABELS[day]}
+                                    </span>
+                                    {cfg.enabled ? (
+                                      <div className="flex items-center gap-2">
+                                        <Input
+                                          type="time"
+                                          value={cfg.start}
+                                          onChange={e => updateDay(day, { start: e.target.value })}
+                                          className="h-7 w-28 text-xs"
+                                        />
+                                        <span className="text-xs text-muted-foreground">to</span>
+                                        <Input
+                                          type="time"
+                                          value={cfg.end}
+                                          onChange={e => updateDay(day, { end: e.target.value })}
+                                          className="h-7 w-28 text-xs"
+                                        />
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground italic">Office closed</span>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          {/* One-day date overrides */}
+                          <div className="space-y-2">
+                            <Label className="text-sm">Single-day overrides</Label>
+                            <p className="text-xs text-muted-foreground">
+                              Override hours for a specific date (e.g. a public holiday or early finish).
+                            </p>
+
+                            {/* Add override row */}
+                            <div className="flex gap-2">
+                              <Input
+                                type="date"
+                                value={newOverrideDate}
+                                onChange={e => setNewOverrideDate(e.target.value)}
+                                className="h-8 w-44 text-sm"
+                                onKeyDown={e => e.key === 'Enter' && addDateOverride()}
+                              />
+                              <Button size="sm" variant="outline" onClick={addDateOverride} disabled={!newOverrideDate} className="h-8 gap-1">
+                                <Plus className="h-3 w-3" />
+                                Add
+                              </Button>
+                            </div>
+
+                            {/* Existing overrides */}
+                            {Object.keys(oh?.date_overrides ?? {}).sort().length > 0 && (
+                              <div className="space-y-2 max-h-40 overflow-y-auto rounded-md border p-2">
+                                {Object.entries(oh?.date_overrides ?? {}).sort().map(([date, cfg]) => (
+                                  <div key={date} className="flex items-center gap-2 text-sm">
+                                    <span className="text-muted-foreground w-24 shrink-0 text-xs">
+                                      {new Date(date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    </span>
+                                    {/* Closed toggle */}
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={cfg?.enabled ?? true}
+                                      onClick={() => updateDateOverride(date, { enabled: !(cfg?.enabled ?? true) })}
+                                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${cfg?.enabled ? 'bg-primary' : 'bg-input'}`}
+                                    >
+                                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${cfg?.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                    </button>
+                                    {cfg?.enabled ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <Input type="time" value={cfg?.start ?? '09:00'} onChange={e => updateDateOverride(date, { start: e.target.value })} className="h-7 w-24 text-xs" />
+                                        <span className="text-xs text-muted-foreground">–</span>
+                                        <Input type="time" value={cfg?.end ?? '17:00'} onChange={e => updateDateOverride(date, { end: e.target.value })} className="h-7 w-24 text-xs" />
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground italic">Closed</span>
+                                    )}
+                                    <Button variant="ghost" size="sm" className="h-5 w-5 p-0 hover:text-destructive ml-auto" onClick={() => updateDateOverride(date, null)}>
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              })()}
             </TabsContent>
 
             {/* Sync Tab */}

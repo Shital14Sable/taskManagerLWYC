@@ -44,6 +44,11 @@ export interface Task {
   // Pinning for drag & drop scheduling
   is_pinned: boolean;
   pin_type: PinType;
+
+  // Optional scheduling time window (HH:MM). When set, the scheduler will only
+  // place this task within this window. Set by the office-hours system at runtime.
+  time_window_start?: string | null;
+  time_window_end?: string | null;
 }
 
 export interface TaskCreate {

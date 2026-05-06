@@ -18,6 +18,13 @@ const phaseStripColor: Record<CycleSeason, string> = {
   autumn: '#fb923c',
 }
 
+const phaseFillColor: Record<CycleSeason, string> = {
+  winter: 'rgba(96,165,250,0.12)',
+  spring: 'rgba(74,222,128,0.12)',
+  summer: 'rgba(250,204,21,0.12)',
+  autumn: 'rgba(251,146,60,0.12)',
+}
+
 const phaseTextColor: Record<CycleSeason, string> = {
   winter: 'text-blue-400',
   spring: 'text-green-400',
@@ -25,11 +32,11 @@ const phaseTextColor: Record<CycleSeason, string> = {
   autumn: 'text-orange-400',
 }
 
-const phaseInfo: Record<CycleSeason, { emoji: string; short: string }> = {
-  winter: { emoji: '❄️', short: 'Menstruation' },
-  spring: { emoji: '🌱', short: 'Follicular' },
-  summer: { emoji: '☀️', short: 'Ovulation' },
-  autumn: { emoji: '🍂', short: 'Luteal' },
+const phaseInfo: Record<CycleSeason, { emoji: string; name: string; short: string }> = {
+  winter: { emoji: '❄️', name: 'Menstruation', short: 'Menstruation' },
+  spring: { emoji: '🌱', name: 'Follicular',   short: 'Follicular' },
+  summer: { emoji: '☀️', name: 'Ovulation',    short: 'Ovulation' },
+  autumn: { emoji: '🍂', name: 'Luteal',       short: 'Luteal' },
 }
 
 interface WeekDayTask {
@@ -398,12 +405,18 @@ export function WeekView() {
               selectedDay?.date === day.date && "ring-2 ring-primary shadow-lg"
             )}
           >
-            {/* Phase color strip at top of card */}
-            {season && (
-              <div className="h-[3px] w-full" style={{ backgroundColor: phaseStripColor[season] }} />
-            )}
-            <CardHeader className="p-3 pb-2">
-              <CardTitle className="text-sm flex items-center justify-between">
+            <CardHeader
+              className="p-3 pb-2 relative overflow-hidden"
+              style={season ? { backgroundColor: phaseFillColor[season] } : undefined}
+            >
+              {/* Phase accent stripe */}
+              {season && (
+                <div
+                  className="absolute top-0 left-0 right-0 h-1"
+                  style={{ backgroundColor: phaseStripColor[season] }}
+                />
+              )}
+              <CardTitle className="text-sm flex items-center justify-between mt-0.5">
                 <span className={cn(
                   "font-medium",
                   day.is_today && "text-primary"
@@ -419,9 +432,9 @@ export function WeekView() {
               </CardTitle>
               {/* Cycle phase label */}
               {season && (
-                <div className={cn("text-[10px] flex items-center gap-0.5 -mt-0.5", phaseTextColor[season])}>
+                <div className={cn("text-xs flex items-center gap-1 font-medium", phaseTextColor[season])}>
                   <span>{phaseInfo[season].emoji}</span>
-                  <span>{phaseInfo[season].short}</span>
+                  <span>{phaseInfo[season].name}</span>
                 </div>
               )}
               {day.tasks.length > 0 && (

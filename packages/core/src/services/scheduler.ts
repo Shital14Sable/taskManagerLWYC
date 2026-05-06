@@ -462,6 +462,14 @@ export class Scheduler {
 
           if (taskDuration > remaining) continue; // Doesn't fit
 
+          // Respect per-task time window (set by office-hours system)
+          if (task.time_window_start && task.time_window_end) {
+            const winStart = timeToMinutes(task.time_window_start);
+            const winEnd   = timeToMinutes(task.time_window_end);
+            if (currentTime < winStart) continue;           // window not open yet
+            if (currentTime + taskDuration > winEnd) continue; // won't finish before window closes
+          }
+
           // Check if we need a break
           if (continuousWork > 0 && continuousWork + taskDuration > maxDeepWork) {
             const breakDuration = 15;
