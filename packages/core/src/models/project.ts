@@ -14,6 +14,7 @@ export interface Project {
   created_at: string;  // ISO datetime string
   updated_at: string;  // ISO datetime string
   completed_at: string | null;  // ISO datetime string
+  deadline?: string | null;     // ISO date string (YYYY-MM-DD) — target completion date
 }
 
 export interface ProjectCreate {
@@ -23,6 +24,7 @@ export interface ProjectCreate {
   tags?: string[];
   parent_id?: string | null;
   color?: string | null;
+  deadline?: string | null;
 }
 
 export interface ProjectUpdate {
@@ -33,6 +35,7 @@ export interface ProjectUpdate {
   tags?: string[];
   parent_id?: string | null;
   color?: string | null;
+  deadline?: string | null;
 }
 
 export function createProject(data: ProjectCreate): Project {
@@ -49,5 +52,6 @@ export function createProject(data: ProjectCreate): Project {
     created_at: now,
     updated_at: now,
     completed_at: null,
+    deadline: data.deadline ?? null,
   };
 }

@@ -5,3 +5,4 @@ export { DeadlinesWidget } from './DeadlinesWidget';
 export { HabitsWidget } from './HabitsWidget';
 export { WeeklyReviewWidget } from './WeeklyReviewWidget';
 export { MoodCheckInWidget } from './MoodCheckInWidget';
+export { CyclePhaseWidget } from './CyclePhaseWidget';

@@ -178,16 +178,20 @@ def start_server(enable_git_sync: bool = True, git_sync_interval: int = 120):
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
+    port = 3000
+    host = "localhost"
+
     # Check if web UI is available
     web_dist = get_web_dist_path()
-    if web_dist:
-        print(f"🌐 Web UI available at http://localhost:3000 (from {web_dist})")
 
     print("🚀 TaskMan Server starting...")
-    print("📊 API docs: http://localhost:3000/docs")
+    print(f"🌐 Running at:  http://{host}:{port}")
+    if web_dist:
+        print(f"   Web UI:      http://{host}:{port}")
+    print(f"   API docs:    http://{host}:{port}/docs")
 
     # Start server
-    uvicorn.run(app, host="0.0.0.0", port=3000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 if __name__ == "__main__":

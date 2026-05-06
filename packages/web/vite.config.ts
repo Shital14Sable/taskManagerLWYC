@@ -4,7 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 
 // Version bump this when you need to force cache invalidation
-const APP_VERSION = '1.1.14';
+const APP_VERSION = '1.3.2';
 
 export default defineConfig({
   plugins: [

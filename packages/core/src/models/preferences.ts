@@ -49,6 +49,20 @@ export interface MoodBlock {
   end: string;    // HH:MM
 }
 
+export type CycleSeason = 'winter' | 'spring' | 'summer' | 'autumn';
+
+export interface CyclePreferences {
+  enabled: boolean;
+  // History of period start dates (YYYY-MM-DD), sorted ascending; last entry = most recent period
+  period_history: string[];
+  // Fallback average when < 2 history entries; ignored once history has 2+ dates (rolling avg used instead)
+  average_cycle_length: number;
+  // null = auto-detect from history; set to a season to manually pin the current phase
+  phase_override: CycleSeason | null;
+  // Deprecated — kept for migration from v1.1.x data; prefer period_history
+  last_period_start?: string | null;
+}
+
 export interface SidebarPreferences {
   visible: boolean;
   collapsedWidgets: string[];  // IDs of collapsed widgets
@@ -69,6 +83,7 @@ export interface UserPreferences {
   onboarding?: OnboardingState;
   sidebar?: SidebarPreferences;
   mood_blocks?: MoodBlock[];
+  cycle?: CyclePreferences;
 }
 
 export function createDefaultWorkHours(): Record<string, DayWorkHours> {

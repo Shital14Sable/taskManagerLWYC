@@ -3,7 +3,7 @@ import {
   ArrowLeft, Plus, Clock, Target, CheckCircle2, AlertCircle,
   Calendar, TrendingUp, Edit, Trash2, RefreshCw, ListTodo,
   Flame, Zap, Moon, MoreVertical, Play, Pause, Archive, Check,
-  FolderOpen, ChevronRight
+  FolderOpen, ChevronRight, Shuffle
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -31,6 +31,7 @@ import { BarChart } from '@/components/charts/BarChart'
 import { useApp } from '@/context/AppContext'
 import { useTasks } from '@/hooks/useTasks'
 import { useProjects } from '@/hooks/useProjects'
+import { distributeCycleTasks } from '@/utils/cycle'
 import type { Project, Task } from '@/types'
 import { cn } from '@/lib/utils'
 import { v4 as uuidv4 } from 'uuid'
@@ -80,7 +81,7 @@ const energyIcons = {
 }
 
 export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSelectProject }: ProjectViewProps) {
-  const { projects, tasks: allTasks, saveProject, saveTask, deleteTask } = useApp()
+  const { projects, tasks: allTasks, saveProject, saveTask, deleteTask, preferences } = useApp()
   const { completeTask } = useTasks(projectId)
   const { getChildProjects, unpauseAllSubprojects } = useProjects()
   const [quickTaskTitle, setQuickTaskTitle] = useState('')
@@ -88,6 +89,15 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
   const [creatingTask, setCreatingTask] = useState(false)
   const [taskFilter, setTaskFilter] = useState<'all' | 'remaining' | 'completed'>('remaining')
   const [unpausingSubprojects, setUnpausingSubprojects] = useState(false)
+  const [editingDeadline, setEditingDeadline] = useState(false)
+  const [deadlineInput, setDeadlineInput] = useState('')
+  const [distributing, setDistributing] = useState(false)
+  const [distributeResult, setDistributeResult] = useState<{
+    count: number
+    days: number
+    byPhase: Record<string, number>
+  } | null>(null)
+  const [clearingDates, setClearingDates] = useState(false)
 
   // Get project and tasks from local storage
   const project = useMemo(() => projects.find(p => p.id === projectId) || null, [projects, projectId])
@@ -251,6 +261,65 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
     }
   }
 
+  const handleSaveDeadline = async () => {
+    if (!project) return
+    const deadline = deadlineInput || null
+    await saveProject({ ...project, deadline, updated_at: new Date().toISOString() })
+    setEditingDeadline(false)
+  }
+
+  const handleClearDistribution = async () => {
+    const incompleteTasks = tasks.filter(t => t.status !== 'completed' && !t.is_habit && !t.parent_task_id && t.scheduled_for)
+    if (incompleteTasks.length === 0) return
+    setClearingDates(true)
+    try {
+      const now = new Date().toISOString()
+      await Promise.all(
+        incompleteTasks.map(task => saveTask({ ...task, scheduled_for: null, updated_at: now }))
+      )
+      setDistributeResult(null)
+    } catch (err) {
+      console.error('Failed to clear task dates:', err)
+    } finally {
+      setClearingDates(false)
+    }
+  }
+
+  const handleDistributeByCycle = async () => {
+    if (!project?.deadline || !preferences) return
+    const incompleteTasks = tasks.filter(t => t.status !== 'completed' && !t.is_habit && !t.parent_task_id)
+    if (incompleteTasks.length === 0) return
+
+    setDistributing(true)
+    setDistributeResult(null)
+    try {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const deadline = new Date(project.deadline + 'T00:00:00')
+      const assignments = distributeCycleTasks(incompleteTasks, today, deadline, preferences)
+
+      const now = new Date().toISOString()
+      const uniqueDays = new Set(assignments.map(a => a.scheduledFor))
+      const byPhase: Record<string, number> = {}
+      for (const a of assignments) {
+        byPhase[a.season] = (byPhase[a.season] ?? 0) + 1
+      }
+
+      await Promise.all(
+        assignments.map(({ taskId, scheduledFor }) => {
+          const task = incompleteTasks.find(t => t.id === taskId)
+          if (!task) return Promise.resolve()
+          return saveTask({ ...task, scheduled_for: scheduledFor, updated_at: now })
+        })
+      )
+      setDistributeResult({ count: assignments.length, days: uniqueDays.size, byPhase })
+    } catch (err) {
+      console.error('Failed to distribute tasks:', err)
+    } finally {
+      setDistributing(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -311,13 +380,93 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
             {project.description && (
               <p className="text-muted-foreground mt-1 max-w-2xl">{project.description}</p>
             )}
-            <p className="text-xs text-muted-foreground mt-2">
-              Created {new Date(project.created_at).toLocaleDateString()}
-            </p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2">
+              <p className="text-xs text-muted-foreground">
+                Created {new Date(project.created_at).toLocaleDateString()}
+              </p>
+
+              {/* Deadline inline editor */}
+              {editingDeadline ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="date"
+                    value={deadlineInput}
+                    onChange={e => setDeadlineInput(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    className="h-6 text-xs border rounded px-1 bg-background"
+                    onKeyDown={e => { if (e.key === 'Enter') handleSaveDeadline(); if (e.key === 'Escape') setEditingDeadline(false) }}
+                    autoFocus
+                  />
+                  <Button size="sm" className="h-6 text-xs px-2" onClick={handleSaveDeadline}>Save</Button>
+                  <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditingDeadline(false)}>Cancel</Button>
+                </div>
+              ) : (
+                <button
+                  className="text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => { setDeadlineInput(project.deadline ?? ''); setEditingDeadline(true) }}
+                >
+                  <Calendar className="h-3 w-3" />
+                  {project.deadline
+                    ? <>Deadline: <span className="font-medium text-foreground">{new Date(project.deadline + 'T00:00:00').toLocaleDateString()}</span></>
+                    : 'Set deadline'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        <DropdownMenu>
+        <div className="flex items-start gap-2 shrink-0">
+          {/* Cycle distribute button — shown when deadline is set */}
+          {project.deadline && (
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={preferences?.cycle?.enabled ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={handleDistributeByCycle}
+                  disabled={distributing || clearingDates || tasks.filter(t => t.status !== 'completed' && !t.is_habit).length === 0}
+                  className="gap-2"
+                  title={preferences?.cycle?.enabled ? 'Spread tasks across cycle phases up to deadline' : 'Enable cycle tracking in Settings → Cycle first'}
+                >
+                  <Shuffle className="h-4 w-4" />
+                  {distributing ? 'Distributing…' : 'Distribute by Cycle'}
+                </Button>
+                {tasks.some(t => t.status !== 'completed' && !t.is_habit && t.scheduled_for) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearDistribution}
+                    disabled={distributing || clearingDates}
+                    className="text-muted-foreground text-xs gap-1"
+                    title="Clear all scheduled_for dates on this project's tasks and let the scheduler reschedule freely"
+                  >
+                    {clearingDates ? 'Clearing…' : 'Reset dates'}
+                  </Button>
+                )}
+              </div>
+              {distributeResult && (
+                <div className="text-xs text-muted-foreground text-right space-y-0.5">
+                  <p className="font-medium text-foreground">
+                    {distributeResult.count} task{distributeResult.count !== 1 ? 's' : ''} spread across {distributeResult.days} day{distributeResult.days !== 1 ? 's' : ''}
+                  </p>
+                  <p className="flex items-center justify-end gap-2 flex-wrap">
+                    {Object.entries(distributeResult.byPhase).map(([season, count]) => {
+                      const emoji = { winter: '❄️', spring: '🌱', summer: '☀️', autumn: '🍂', any: '📅' }[season] ?? '📅'
+                      return (
+                        <span key={season}>{emoji} {count}</span>
+                      )
+                    })}
+                  </p>
+                  <p className="text-[10px]">Now hit Reschedule All in Today view</p>
+                </div>
+              )}
+              {!preferences?.cycle?.enabled && (
+                <p className="text-xs text-muted-foreground">Enable cycle tracking in Settings → Cycle</p>
+              )}
+            </div>
+          )}
+
+          <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon">
               <MoreVertical className="h-4 w-4" />
@@ -361,6 +510,7 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
 
       {/* Quick Stats Row */}

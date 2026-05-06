@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Clock, Zap, Save, Download, Upload, FileJson, Trash2, AlertTriangle, Github, Cloud, LogOut, RefreshCw, Mail, BookOpen, Rocket, Eye } from 'lucide-react'
+import { Settings, Clock, Save, Download, Upload, FileJson, Trash2, AlertTriangle, Github, Cloud, LogOut, RefreshCw, Mail, BookOpen, Rocket, Eye, Moon, X, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,20 +20,16 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import type { UserPreferences, EnergyLevel } from '@trackmind/core'
+import type { UserPreferences } from '@trackmind/core'
 import { useApp } from '@/context/AppContext'
 import { useHelpMode } from '@/context/HelpModeContext'
 import { Documentation } from '@/components/Documentation'
+import { getCyclePhaseFromPrefs, computeAverageCycleLength } from '@/utils/cycle'
+import type { CycleSeason } from '@/utils/cycle'
 
 interface DayWorkHours {
   start: string
   end: string
-}
-
-interface EnergyBlock {
-  start: string
-  end: string
-  level: EnergyLevel
 }
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -94,6 +90,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [newPeriodDate, setNewPeriodDate] = useState('')
 
   // Sync handlers with error display
   const handleSync = async () => {
@@ -346,67 +343,14 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
     })
   }
 
-  const updateEnergyBlock = (day: string, index: number, field: keyof EnergyBlock, value: string) => {
-    if (!preferences) return
-    const patterns = [...preferences.energy_patterns[day]]
-    patterns[index] = { ...patterns[index], [field]: value }
-    setPreferences({
-      ...preferences,
-      energy_patterns: {
-        ...preferences.energy_patterns,
-        [day]: patterns,
-      },
-    })
-  }
-
-  const addEnergyBlock = (day: string) => {
-    if (!preferences) return
-    const patterns = preferences.energy_patterns[day] || []
-    const lastBlock = patterns[patterns.length - 1]
-    const newBlock: EnergyBlock = {
-      start: lastBlock?.end || '08:00',
-      end: '22:00',
-      level: 'medium',
-    }
-    setPreferences({
-      ...preferences,
-      energy_patterns: {
-        ...preferences.energy_patterns,
-        [day]: [...patterns, newBlock],
-      },
-    })
-  }
-
-  const removeEnergyBlock = (day: string, index: number) => {
-    if (!preferences) return
-    const patterns = preferences.energy_patterns[day].filter((_, i) => i !== index)
-    setPreferences({
-      ...preferences,
-      energy_patterns: {
-        ...preferences.energy_patterns,
-        [day]: patterns,
-      },
-    })
-  }
-
   const copyToAllDays = (sourceDay: string) => {
     if (!preferences) return
     const sourceWorkHours = preferences.work_hours[sourceDay]
-    const sourceEnergy = preferences.energy_patterns[sourceDay]
-
     const newWorkHours: Record<string, DayWorkHours> = {}
-    const newEnergyPatterns: Record<string, EnergyBlock[]> = {}
-
     for (const day of DAYS) {
       newWorkHours[day] = { ...sourceWorkHours }
-      newEnergyPatterns[day] = sourceEnergy.map(e => ({ ...e }))
     }
-
-    setPreferences({
-      ...preferences,
-      work_hours: newWorkHours,
-      energy_patterns: newEnergyPatterns,
-    })
+    setPreferences({ ...preferences, work_hours: newWorkHours })
   }
 
   // Calculate summary
@@ -442,9 +386,9 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                 <Clock className="h-4 w-4" />
                 Work Hours
               </TabsTrigger>
-              <TabsTrigger value="energy" className="gap-2">
-                <Zap className="h-4 w-4" />
-                Energy
+              <TabsTrigger value="cycle" className="gap-2">
+                <Moon className="h-4 w-4" />
+                Cycle
               </TabsTrigger>
               <TabsTrigger value="data" className="gap-2">
                 <FileJson className="h-4 w-4" />
@@ -457,7 +401,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
             </TabsList>
 
             {/* Day Selector (only for work hours and energy tabs) */}
-            {(activeTab === 'work-hours' || activeTab === 'energy') && (
+            {activeTab === 'work-hours' && (
               <div className="flex gap-1 justify-center">
                 {DAYS.map((day) => (
                   <Button
@@ -572,79 +516,6 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                     <p className="text-xs text-muted-foreground">
                       Tasks shorter than this won't be scheduled. They'll appear in the unscheduled list.
                     </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* Energy Patterns Tab */}
-            <TabsContent value="energy" className="space-y-4">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base capitalize">{selectedDay} Energy Patterns</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {preferences.energy_patterns[selectedDay]?.map((block, index) => (
-                    <div key={index} className="flex items-end gap-2 p-3 border rounded-lg">
-                      <div className="flex-1 space-y-2">
-                        <Label className="text-xs">Start</Label>
-                        <Input
-                          type="time"
-                          value={block.start}
-                          onChange={(e) => updateEnergyBlock(selectedDay, index, 'start', e.target.value)}
-                        />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <Label className="text-xs">End</Label>
-                        <Input
-                          type="time"
-                          value={block.end}
-                          onChange={(e) => updateEnergyBlock(selectedDay, index, 'end', e.target.value)}
-                        />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <Label className="text-xs">Energy</Label>
-                        <Select
-                          value={block.level}
-                          onValueChange={(value) => updateEnergyBlock(selectedDay, index, 'level', value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="high">High</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="low">Low</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {preferences.energy_patterns[selectedDay].length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeEnergyBlock(selectedDay, index)}
-                          className="text-destructive"
-                        >
-                          Remove
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addEnergyBlock(selectedDay)}
-                    >
-                      Add Block
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => copyToAllDays(selectedDay)}
-                    >
-                      Copy to all days
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -956,6 +827,273 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* Cycle Tab */}
+            <TabsContent value="cycle" className="space-y-4">
+              {(() => {
+                const history = preferences.cycle?.period_history ?? []
+                const sortedHistory = [...history].sort().reverse() // most recent first for display
+                const computedAvg = computeAverageCycleLength(history)
+                const today = new Date().toISOString().split('T')[0]
+
+                const updateCycle = (patch: Partial<{
+                  enabled: boolean
+                  period_history: string[]
+                  average_cycle_length: number
+                  phase_override: CycleSeason | null
+                }>) =>
+                  setPreferences({
+                    ...preferences,
+                    cycle: {
+                      enabled: preferences.cycle?.enabled ?? false,
+                      period_history: history,
+                      average_cycle_length: preferences.cycle?.average_cycle_length ?? 28,
+                      phase_override: preferences.cycle?.phase_override ?? null,
+                      ...patch,
+                    },
+                  })
+
+                const addPeriodDate = () => {
+                  if (!newPeriodDate) return
+                  if (history.includes(newPeriodDate)) return
+                  updateCycle({ period_history: [...history, newPeriodDate].sort() })
+                  setNewPeriodDate('')
+                }
+
+                const removePeriodDate = (date: string) =>
+                  updateCycle({ period_history: history.filter(d => d !== date) })
+
+                const phase = getCyclePhaseFromPrefs(preferences)
+                const phaseColors: Record<string, string> = {
+                  winter: 'text-blue-400',
+                  spring: 'text-green-400',
+                  summer: 'text-yellow-400',
+                  autumn: 'text-orange-400',
+                }
+
+                return (
+                  <>
+                    <Card>
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Moon className="h-4 w-4" />
+                          Cycle-Aware Scheduling
+                        </CardTitle>
+                        <CardDescription>
+                          Align your tasks with your menstrual cycle phases to work with your natural energy rhythms.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-5">
+
+                        {/* Enable toggle */}
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <Label className="text-sm font-medium">Enable cycle tracking</Label>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              Shows a phase widget in your daily sidebar
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={preferences.cycle?.enabled ?? false}
+                            onClick={() => updateCycle({ enabled: !(preferences.cycle?.enabled ?? false) })}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                              preferences.cycle?.enabled ? 'bg-primary' : 'bg-input'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${
+                                preferences.cycle?.enabled ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        {preferences.cycle?.enabled && (
+                          <>
+                            {/* Period history */}
+                            <div className="space-y-2">
+                              <div>
+                                <Label className="text-sm">Period start dates</Label>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  Each date you add improves the accuracy of your cycle average. Only stored locally.
+                                </p>
+                              </div>
+
+                              {/* Add date row */}
+                              <div className="flex gap-2">
+                                <Input
+                                  type="date"
+                                  value={newPeriodDate}
+                                  onChange={e => setNewPeriodDate(e.target.value)}
+                                  max={today}
+                                  className="w-44 h-8 text-sm"
+                                  onKeyDown={e => e.key === 'Enter' && addPeriodDate()}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={addPeriodDate}
+                                  disabled={!newPeriodDate || history.includes(newPeriodDate)}
+                                  className="h-8 gap-1"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                  Add
+                                </Button>
+                              </div>
+
+                              {/* History list */}
+                              {sortedHistory.length > 0 && (
+                                <div className="space-y-1 max-h-36 overflow-y-auto rounded-md border p-2">
+                                  {sortedHistory.map((date, i) => (
+                                    <div key={date} className="flex items-center justify-between text-sm py-0.5">
+                                      <span className="text-muted-foreground">
+                                        {new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
+                                          month: 'short', day: 'numeric', year: 'numeric'
+                                        })}
+                                        {i === 0 && (
+                                          <span className="ml-2 text-xs text-primary font-medium">most recent</span>
+                                        )}
+                                      </span>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-5 w-5 p-0 hover:text-destructive"
+                                        onClick={() => removePeriodDate(date)}
+                                      >
+                                        <X className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {history.length === 0 && (
+                                <p className="text-xs text-muted-foreground italic">
+                                  No dates added yet. Add at least one to enable phase detection.
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Average cycle length */}
+                            <div className="space-y-1.5">
+                              <Label className="text-sm">Average cycle length</Label>
+                              {computedAvg !== null ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="rounded-md border px-3 py-1.5 text-sm font-medium bg-muted/40 w-24 text-center">
+                                    {computedAvg} days
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">
+                                    Computed from {history.length} period{history.length !== 1 ? 's' : ''}
+                                  </p>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      id="cycle-length"
+                                      type="number"
+                                      min={21}
+                                      max={60}
+                                      value={preferences.cycle?.average_cycle_length ?? 28}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value, 10)
+                                        if (!isNaN(val) && val >= 21 && val <= 60) {
+                                          updateCycle({ average_cycle_length: val })
+                                        }
+                                      }}
+                                      className="w-24 h-8"
+                                    />
+                                    <span className="text-sm text-muted-foreground">days</span>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">
+                                    Enter manually until you have 2+ logged dates (then it auto-computes).
+                                  </p>
+                                </>
+                              )}
+                            </div>
+
+                            {/* Phase override */}
+                            <div className="space-y-1.5">
+                              <Label className="text-sm">Current phase</Label>
+                              <Select
+                                value={preferences.cycle?.phase_override ?? 'auto'}
+                                onValueChange={(val) =>
+                                  updateCycle({ phase_override: val === 'auto' ? null : val as CycleSeason })
+                                }
+                              >
+                                <SelectTrigger className="w-56 h-8 text-sm">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="auto">Auto-detect from dates</SelectItem>
+                                  <SelectItem value="winter">❄️ Winter — Menstruation</SelectItem>
+                                  <SelectItem value="spring">🌱 Spring — Follicular</SelectItem>
+                                  <SelectItem value="summer">☀️ Summer — Ovulation</SelectItem>
+                                  <SelectItem value="autumn">🍂 Autumn — Luteal</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <p className="text-xs text-muted-foreground">
+                                Override if you know your current phase or your cycle arrived early/late.
+                              </p>
+                            </div>
+
+                            {/* Current phase preview */}
+                            {phase && (
+                              <div className="rounded-lg border p-3 bg-muted/30 space-y-1">
+                                <p className="text-xs font-medium text-muted-foreground">
+                                  Current phase
+                                  {phase.isOverride && (
+                                    <span className="ml-2 text-primary">· manual override</span>
+                                  )}
+                                </p>
+                                <p className={`text-sm font-semibold ${phaseColors[phase.season]}`}>
+                                  {phase.emoji} {phase.name}: {phase.phase}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {phase.isOverride
+                                    ? phase.invitation
+                                    : `Day ${phase.cycleDay} · ${phase.energyLevel} energy · ${phase.invitation}`}
+                                </p>
+                                {computedAvg !== null && !phase.isOverride && (
+                                  <p className="text-xs text-muted-foreground">
+                                    Based on {computedAvg}-day average computed from your history
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </CardContent>
+                    </Card>
+
+                    {/* Phase overview */}
+                    <Card>
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-sm font-medium">The four phases</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {[
+                          { emoji: '❄️', name: 'Winter (Days 1–5)', phase: 'Menstruation', energy: 'Low energy', color: 'text-blue-400', tip: 'Rest, reflect, journal, solo deep work' },
+                          { emoji: '🌱', name: 'Spring (Days 6–13)', phase: 'Follicular', energy: 'Rising energy', color: 'text-green-400', tip: 'New projects, deep learning, creative work' },
+                          { emoji: '☀️', name: 'Summer (Days 14–16)', phase: 'Ovulation', energy: 'Peak energy', color: 'text-yellow-400', tip: 'Presentations, negotiations, networking' },
+                          { emoji: '🍂', name: 'Autumn (Days 17–28)', phase: 'Luteal', energy: 'Waning energy', color: 'text-orange-400', tip: 'Complete projects, admin tasks, editing' },
+                        ].map((p) => (
+                          <div key={p.phase} className="flex items-start gap-3">
+                            <span className="text-lg">{p.emoji}</span>
+                            <div>
+                              <p className={`text-xs font-medium ${p.color}`}>{p.name} — {p.energy}</p>
+                              <p className="text-xs text-muted-foreground">{p.tip}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  </>
+                )
+              })()}
             </TabsContent>
 
             {/* Help Tab */}

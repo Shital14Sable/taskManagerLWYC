@@ -5,9 +5,32 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DayScheduleDetail } from '@/components/DayScheduleDetail'
 import { useApp } from '@/context/AppContext'
+import { getCyclePhaseForDate } from '@/utils/cycle'
+import type { CycleSeason } from '@/utils/cycle'
 import { cn } from '@/lib/utils'
 import { toISODateString } from '@trackmind/core'
 import type { Task, Schedule } from '@/types'
+
+const phaseStripColor: Record<CycleSeason, string> = {
+  winter: '#60a5fa',
+  spring: '#4ade80',
+  summer: '#facc15',
+  autumn: '#fb923c',
+}
+
+const phaseFillColor: Record<CycleSeason, string> = {
+  winter: 'rgba(96,165,250,0.15)',
+  spring: 'rgba(74,222,128,0.15)',
+  summer: 'rgba(250,204,21,0.15)',
+  autumn: 'rgba(251,146,60,0.15)',
+}
+
+const phaseLabel: Record<CycleSeason, { emoji: string; name: string; short: string }> = {
+  winter: { emoji: '❄️', name: 'Menstruation', short: 'Mens.' },
+  spring: { emoji: '🌱', name: 'Follicular',   short: 'Foll.' },
+  summer: { emoji: '☀️', name: 'Ovulation',    short: 'Ovul.' },
+  autumn: { emoji: '🍂', name: 'Luteal',       short: 'Lut.'  },
+}
 
 interface MonthDayTask {
   id: string
@@ -140,7 +163,12 @@ function buildMonthViewData(
   }
 }
 
-function DayCell({ day, onClick, isSelected }: { day: MonthDay; onClick: () => void; isSelected: boolean }) {
+function DayCell({ day, onClick, isSelected, cycleSeason }: {
+  day: MonthDay
+  onClick: () => void
+  isSelected: boolean
+  cycleSeason?: CycleSeason
+}) {
   const hasHighPriority = day.high_priority_count > 0
   const completionRate = day.task_count > 0
     ? (day.completed_count / day.task_count) * 100
@@ -150,23 +178,38 @@ function DayCell({ day, onClick, isSelected }: { day: MonthDay; onClick: () => v
     <button
       onClick={onClick}
       className={cn(
-        "h-24 p-2 border rounded-md text-left transition-all hover:bg-accent/50 hover:shadow-md",
+        "h-24 p-2 border rounded-md text-left transition-all hover:bg-accent/50 hover:shadow-md relative overflow-hidden",
         day.is_today && "ring-2 ring-primary",
         day.is_weekend && "bg-muted/30",
         !day.has_schedule && "opacity-50",
         isSelected && "ring-2 ring-primary shadow-lg bg-accent/30"
       )}
     >
-      <div className="flex items-center justify-between mb-1">
+      {/* Phase color strip at top */}
+      {cycleSeason && (
+        <span
+          className="absolute top-0 left-0 right-0 h-[3px]"
+          style={{ backgroundColor: phaseStripColor[cycleSeason] }}
+        />
+      )}
+
+      <div className="flex items-center justify-between mb-1 mt-0.5">
         <span className={cn(
           "text-sm font-medium",
           day.is_today && "bg-primary text-primary-foreground px-1.5 py-0.5 rounded"
         )}>
           {day.day}
         </span>
-        {hasHighPriority && (
-          <span className="w-2 h-2 rounded-full bg-red-500" title="High priority tasks" />
-        )}
+        <div className="flex items-center gap-1">
+          {cycleSeason && (
+            <span className="text-[11px] leading-none" title={phaseLabel[cycleSeason].short}>
+              {phaseLabel[cycleSeason].emoji}
+            </span>
+          )}
+          {hasHighPriority && (
+            <span className="w-2 h-2 rounded-full bg-red-500" title="High priority tasks" />
+          )}
+        </div>
       </div>
 
       {day.task_count > 0 && (
@@ -211,7 +254,7 @@ function DayCell({ day, onClick, isSelected }: { day: MonthDay; onClick: () => v
 }
 
 export function MonthView() {
-  const { tasks, schedules, loadSchedules } = useApp()
+  const { tasks, schedules, loadSchedules, preferences } = useApp()
   const [loading, setLoading] = useState(true)
   const [currentYear, setCurrentYear] = useState<number>(new Date().getFullYear())
   const [currentMonth, setCurrentMonth] = useState<number>(new Date().getMonth() + 1)
@@ -280,6 +323,39 @@ export function MonthView() {
       }
     }
   }, [monthData, scheduleFilter])
+
+  // Precompute cycle phase season per day for the current month view
+  const cyclePhaseDays = useMemo((): Map<number, CycleSeason> => {
+    const map = new Map<number, CycleSeason>()
+    if (!preferences?.cycle?.enabled) return map
+    const daysInMonth = new Date(currentYear, currentMonth, 0).getDate()
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(currentYear, currentMonth - 1, day)
+      const phase = getCyclePhaseForDate(date, preferences.cycle)
+      if (phase) map.set(day, phase.season)
+    }
+    return map
+  }, [preferences, currentYear, currentMonth])
+
+  // Collapse cyclePhaseDays into consecutive segments for the timeline bar
+  const cyclePhaseSegments = useMemo(() => {
+    if (cyclePhaseDays.size === 0) return []
+    const daysInMonth = new Date(currentYear, currentMonth, 0).getDate()
+    const segments: Array<{ season: CycleSeason; startDay: number; endDay: number }> = []
+    let current: CycleSeason | null = null
+    let segStart = 1
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const season = cyclePhaseDays.get(day) ?? null
+      if (season !== current) {
+        if (current !== null) segments.push({ season: current, startDay: segStart, endDay: day - 1 })
+        current = season
+        segStart = day
+      }
+    }
+    if (current !== null) segments.push({ season: current, startDay: segStart, endDay: daysInMonth })
+    return segments
+  }, [cyclePhaseDays, currentYear, currentMonth])
 
   const navigateMonth = (direction: 'prev' | 'next') => {
     let newMonth = currentMonth + (direction === 'prev' ? -1 : 1)
@@ -373,6 +449,49 @@ export function MonthView() {
         </div>
       </div>
 
+      {/* Cycle phase timeline bar */}
+      {cyclePhaseSegments.length > 0 && (() => {
+        const daysInMonth = new Date(currentYear, currentMonth, 0).getDate()
+        return (
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground font-medium">Cycle phases this month</p>
+            <div className="flex w-full rounded-lg overflow-hidden border border-border/50 h-10">
+              {cyclePhaseSegments.map((seg, i) => {
+                const pct = ((seg.endDay - seg.startDay + 1) / daysInMonth) * 100
+                const days = seg.endDay - seg.startDay + 1
+                const color = phaseStripColor[seg.season]
+                const fill  = phaseFillColor[seg.season]
+                const label = phaseLabel[seg.season]
+                return (
+                  <div
+                    key={i}
+                    style={{ width: `${pct}%`, backgroundColor: fill, borderLeft: i > 0 ? '1px solid rgba(255,255,255,0.1)' : undefined }}
+                    className="flex flex-col justify-center px-2 overflow-hidden relative"
+                    title={`${label.emoji} ${label.name}: days ${seg.startDay}–${seg.endDay}`}
+                  >
+                    {/* Top accent stripe */}
+                    <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ backgroundColor: color }} />
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="text-xs leading-none">{label.emoji}</span>
+                      {pct > 18 && (
+                        <span className="text-xs font-medium truncate" style={{ color }}>
+                          {pct > 28 ? label.name : label.short}
+                        </span>
+                      )}
+                    </div>
+                    {pct > 12 && (
+                      <span className="text-[10px] text-muted-foreground leading-tight">
+                        {seg.startDay}–{seg.endDay} ({days}d)
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Weekday headers */}
       <div className="grid grid-cols-7 gap-2">
         {WEEKDAYS.map((day) => (
@@ -396,9 +515,11 @@ export function MonthView() {
             day={day}
             onClick={() => setSelectedDay(day)}
             isSelected={selectedDay?.date === day.date}
+            cycleSeason={cyclePhaseDays.get(day.day)}
           />
         ))}
       </div>
+
 
       {/* Selected day full schedule detail */}
       {selectedDay && (

@@ -12,6 +12,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { Task, ScheduledTask, Project } from '@/types'
+import { useApp } from '@/context/AppContext'
+import { getCyclePhaseFromPrefs } from '@/utils/cycle'
 import { cn } from '@/lib/utils'
 
 interface TaskFinderProps {
@@ -42,6 +44,9 @@ export function TaskFinder({ tasks, scheduledTasks, projects, onSelectTask }: Ta
   const [customMinutes, setCustomMinutes] = useState<string>('')
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all')
   const [isOpen, setIsOpen] = useState(false)
+
+  const { preferences } = useApp()
+  const cyclePhase = useMemo(() => preferences ? getCyclePhaseFromPrefs(preferences) : null, [preferences])
 
   // Get IDs of tasks already scheduled for today
   const scheduledTaskIds = useMemo(
@@ -99,6 +104,11 @@ export function TaskFinder({ tasks, scheduledTasks, projects, onSelectTask }: Ta
       const fitRatio = task.estimated_minutes / duration
       score += fitRatio * 15
 
+      // Cycle phase alignment: boost tasks matching current phase energy
+      if (cyclePhase && task.energy_level === cyclePhase.energyLevel) {
+        score += 20
+      }
+
       return { task, score }
     })
 
@@ -107,7 +117,7 @@ export function TaskFinder({ tasks, scheduledTasks, projects, onSelectTask }: Ta
       .sort((a, b) => b.score - a.score)
       .slice(0, 10)
       .map(item => item.task)
-  }, [tasks, targetMinutes, customMinutes, scheduledTaskIds, selectedProjectId])
+  }, [tasks, targetMinutes, customMinutes, scheduledTaskIds, selectedProjectId, cyclePhase])
 
   const activeDuration = customMinutes ? parseInt(customMinutes) : targetMinutes
 
@@ -204,6 +214,16 @@ export function TaskFinder({ tasks, scheduledTasks, projects, onSelectTask }: Ta
             </Select>
           </div>
         </div>
+
+        {/* Cycle phase hint */}
+        {cyclePhase && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2">
+            <span>{cyclePhase.emoji}</span>
+            <span>
+              <span className="font-medium">{cyclePhase.name} phase</span> — {cyclePhase.energyLevel} energy tasks prioritized
+            </span>
+          </div>
+        )}
 
         {/* Results */}
         <div className="space-y-2">

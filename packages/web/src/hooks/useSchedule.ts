@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import type { Schedule } from '@trackmind/core';
 import { Scheduler, createDefaultPreferences, toISODateString } from '@trackmind/core';
+import { applyEffectiveEnergyToPrefs } from '@/utils/cycle';
 
 export type UnscheduledReason =
   | 'paused'
@@ -196,7 +197,9 @@ export function useSchedule(date?: string) {
       setError(null);
 
       const prefs = preferences ?? createDefaultPreferences();
-      const scheduler = new Scheduler({ preferences: prefs });
+      // When cycle tracking is enabled, override energy_patterns with the current cycle phase energy
+      const effectivePrefs = applyEffectiveEnergyToPrefs(prefs, new Date());
+      const scheduler = new Scheduler({ preferences: effectivePrefs });
 
       // Get effectively paused project IDs (including sub-projects of paused parents)
       const getEffectivelyPausedProjectIds = (): Set<string> => {
@@ -240,12 +243,24 @@ export function useSchedule(date?: string) {
       // Get active projects
       const activeProjectsList = projects.filter(p => p.status === 'active');
 
-      // Calculate days dynamically based on task count
-      // Each day can roughly handle 6-10 tasks, so estimate days needed
-      // Use a minimum of 1 day (if tasks exist) and maximum of 90 days
+      // Calculate days dynamically:
+      // - Base estimate from task count
+      // - Extended to cover the furthest scheduled_for date (set by cycle distribution)
+      //   so tasks assigned to day 20 or 60 aren't silently dropped.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
       const nonHabitTasks = activeTasks.filter(t => !t.is_habit);
-      const estimatedDaysNeeded = Math.ceil(nonHabitTasks.length / 6); // Assume ~6 non-habit tasks per day
-      const days = options?.days ?? Math.min(90, Math.max(1, estimatedDaysNeeded + 3)); // Add small buffer
+      const estimatedDaysNeeded = Math.ceil(nonHabitTasks.length / 6);
+
+      const furthestScheduledForDays = activeTasks.reduce((max, t) => {
+        if (!t.scheduled_for || (t.is_pinned && t.pin_type === 'hard')) return max;
+        const sfDate = new Date(t.scheduled_for.split('T')[0] + 'T00:00:00');
+        sfDate.setHours(0, 0, 0, 0);
+        const ahead = Math.ceil((sfDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        return Math.max(max, ahead);
+      }, 0);
+
+      const days = options?.days ?? Math.min(180, Math.max(estimatedDaysNeeded + 3, furthestScheduledForDays + 1));
 
       // Generate schedules for each day, tracking which tasks are already scheduled
       const newSchedules: Schedule[] = [];
@@ -261,9 +276,22 @@ export function useSchedule(date?: string) {
         // even when reschedule_all is true. The 'force' flag controls regeneration,
         // not whether to preserve completion status.
         const existingSchedule = schedules.get(targetDate) || null;
+
+        // Only surface tasks that have no date hint, or whose scheduled_for date
+        // has arrived. This lets distributeCycleTasks() spread tasks across future
+        // days by setting scheduled_for — each task becomes visible to the scheduler
+        // only on the day it was assigned to.
+        const tasksForDate = activeTasks.filter(t => {
+          if (!t.scheduled_for) return true;
+          // Hard-pinned tasks carry a full datetime; the scheduler handles them directly
+          if (t.is_pinned && t.pin_type === 'hard') return true;
+          // Soft date hints: only expose on/after the assigned date
+          return t.scheduled_for.split('T')[0] <= targetDate;
+        });
+
         const generatedSchedule = scheduler.generateSchedule({
           targetDate,
-          tasks: activeTasks,
+          tasks: tasksForDate,
           existingSchedule,
           force: options?.reschedule_all,
           previouslyScheduledIds,

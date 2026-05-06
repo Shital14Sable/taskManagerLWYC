@@ -137,6 +137,17 @@ fi
 echo -e "${BLUE}[3/6]${NC} Installing TaskMan Python package..."
 
 cd "$SCRIPT_DIR"
+
+# Create a venv if not already inside one (conda or venv)
+if [[ -z "$VIRTUAL_ENV" && -z "$CONDA_DEFAULT_ENV" ]]; then
+    if [[ ! -d ".venv" ]]; then
+        echo "  Creating virtual environment at .venv..."
+        python3 -m venv .venv
+    fi
+    source .venv/bin/activate
+    echo -e "${GREEN}✓${NC} Virtual environment activated (.venv)"
+fi
+
 pip install -e . --quiet
 echo -e "${GREEN}✓${NC} TaskMan installed"
 
@@ -145,16 +156,21 @@ echo -e "${GREEN}✓${NC} TaskMan installed"
 # =============================================================================
 echo -e "${BLUE}[4/6]${NC} Building Web UI..."
 
-if [[ "$HAS_NODE" == true && -d "$SCRIPT_DIR/web" ]]; then
-    cd "$SCRIPT_DIR/web"
+if [[ "$HAS_NODE" == true && -d "$SCRIPT_DIR/packages/web" ]]; then
+    cd "$SCRIPT_DIR"
+    # Use pnpm if available (monorepo uses pnpm workspaces), otherwise fall back to npm
+    if command -v pnpm &> /dev/null; then
+        PKG_MGR="pnpm"
+    else
+        PKG_MGR="npm"
+    fi
     if [[ ! -d "node_modules" ]]; then
-        echo "  Installing npm dependencies..."
-        npm install --silent 2>/dev/null || npm install
+        echo "  Installing dependencies..."
+        $PKG_MGR install --silent 2>/dev/null || $PKG_MGR install
     fi
     echo "  Building..."
-    npm run build --silent 2>/dev/null || npm run build
+    $PKG_MGR run build > /dev/null 2>&1 || $PKG_MGR run build
     echo -e "${GREEN}✓${NC} Web UI built"
-    cd "$SCRIPT_DIR"
 else
     echo -e "${YELLOW}⚠${NC} Skipping Web UI build"
 fi
@@ -326,8 +342,13 @@ echo "Data directory: $DATA_DIR"
 echo ""
 echo -e "${BLUE}To start TaskMan:${NC}"
 echo ""
-echo "  1. Run: task-server"
-echo "  2. Open http://localhost:3000 in your browser"
+if [[ -d "$SCRIPT_DIR/.venv" ]]; then
+    echo "  1. Activate venv: source $SCRIPT_DIR/.venv/bin/activate"
+    echo "  2. Run: task-server"
+else
+    echo "  1. Run: task-server"
+fi
+echo "  $([ -d "$SCRIPT_DIR/.venv" ] && echo 3 || echo 2). Open http://localhost:3000 in your browser"
 echo ""
 if [[ "$SKIP_SYNC" == false && -d "$DATA_DIR/.git" ]]; then
     echo -e "${BLUE}Git sync:${NC} Enabled (auto-syncs every 2 minutes)"

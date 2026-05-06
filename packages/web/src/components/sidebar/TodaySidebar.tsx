@@ -8,6 +8,7 @@ import { DeadlinesWidget } from './DeadlinesWidget';
 import { HabitsWidget } from './HabitsWidget';
 import { WeeklyReviewWidget } from './WeeklyReviewWidget';
 import { MoodCheckInWidget } from './MoodCheckInWidget';
+import { CyclePhaseWidget } from './CyclePhaseWidget';
 import { cn } from '@/lib/utils';
 
 interface TodaySidebarProps {
@@ -26,6 +27,7 @@ export function TodaySidebar({ selectedDate, onDateSelect, className }: TodaySid
   const toggleHabits = useCallback(() => toggleWidgetCollapsed('habits'), [toggleWidgetCollapsed]);
   const toggleReview = useCallback(() => toggleWidgetCollapsed('review'), [toggleWidgetCollapsed]);
   const toggleMood = useCallback(() => toggleWidgetCollapsed('mood'), [toggleWidgetCollapsed]);
+  const toggleCycle = useCallback(() => toggleWidgetCollapsed('cycle'), [toggleWidgetCollapsed]);
 
   if (!sidebarPreferences.visible) {
     // Collapsed state - show expand button
@@ -95,6 +97,12 @@ export function TodaySidebar({ selectedDate, onDateSelect, className }: TodaySid
       <MoodCheckInWidget
         isCollapsed={isWidgetCollapsed('mood')}
         onToggleCollapse={toggleMood}
+      />
+
+      {/* Cycle Phase Widget — only renders when cycle tracking is enabled */}
+      <CyclePhaseWidget
+        isCollapsed={isWidgetCollapsed('cycle')}
+        onToggleCollapse={toggleCycle}
       />
     </div>
   );

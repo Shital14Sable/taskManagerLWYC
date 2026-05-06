@@ -5,9 +5,32 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DayScheduleDetail } from '@/components/DayScheduleDetail'
 import { useApp } from '@/context/AppContext'
+import { getCyclePhaseForDate } from '@/utils/cycle'
+import type { CycleSeason } from '@/utils/cycle'
 import { cn } from '@/lib/utils'
 import { toISODateString } from '@trackmind/core'
 import type { Task, Schedule } from '@/types'
+
+const phaseStripColor: Record<CycleSeason, string> = {
+  winter: '#60a5fa',
+  spring: '#4ade80',
+  summer: '#facc15',
+  autumn: '#fb923c',
+}
+
+const phaseTextColor: Record<CycleSeason, string> = {
+  winter: 'text-blue-400',
+  spring: 'text-green-400',
+  summer: 'text-yellow-400',
+  autumn: 'text-orange-400',
+}
+
+const phaseInfo: Record<CycleSeason, { emoji: string; short: string }> = {
+  winter: { emoji: '❄️', short: 'Menstruation' },
+  spring: { emoji: '🌱', short: 'Follicular' },
+  summer: { emoji: '☀️', short: 'Ovulation' },
+  autumn: { emoji: '🍂', short: 'Luteal' },
+}
 
 interface WeekDayTask {
   id: string
@@ -195,7 +218,7 @@ function buildWeekViewData(
 }
 
 export function WeekView() {
-  const { tasks, schedules, loadSchedules } = useApp()
+  const { tasks, schedules, loadSchedules, preferences } = useApp()
   const [loading, setLoading] = useState(true)
   const [currentStartDate, setCurrentStartDate] = useState<Date>(() => getWeekStart(new Date()))
   const [selectedDay, setSelectedDay] = useState<WeekDay | null>(null)
@@ -260,6 +283,19 @@ export function WeekView() {
       }
     }
   }, [weekData, scheduleFilter])
+
+  // Precompute cycle phase season per day for this week
+  const cyclePhaseByDate = useMemo((): Map<string, CycleSeason> => {
+    const map = new Map<string, CycleSeason>()
+    if (!preferences?.cycle?.enabled) return map
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(currentStartDate)
+      date.setDate(currentStartDate.getDate() + i)
+      const phase = getCyclePhaseForDate(date, preferences.cycle)
+      if (phase) map.set(toISODateString(date), phase.season)
+    }
+    return map
+  }, [preferences, currentStartDate])
 
   const navigateWeek = (direction: 'prev' | 'next') => {
     setSelectedDay(null)
@@ -349,17 +385,23 @@ export function WeekView() {
 
       {/* Week grid */}
       <div className="grid grid-cols-7 gap-2">
-        {filteredWeekData.days.map((day) => (
+        {filteredWeekData.days.map((day) => {
+          const season = cyclePhaseByDate.get(day.date)
+          return (
           <Card
             key={day.date}
             onClick={() => setSelectedDay(day)}
             className={cn(
-              "min-h-[300px] cursor-pointer transition-all hover:shadow-md",
+              "min-h-[300px] cursor-pointer transition-all hover:shadow-md overflow-hidden",
               day.is_today && "ring-2 ring-primary",
               day.is_weekend && "bg-muted/30",
               selectedDay?.date === day.date && "ring-2 ring-primary shadow-lg"
             )}
           >
+            {/* Phase color strip at top of card */}
+            {season && (
+              <div className="h-[3px] w-full" style={{ backgroundColor: phaseStripColor[season] }} />
+            )}
             <CardHeader className="p-3 pb-2">
               <CardTitle className="text-sm flex items-center justify-between">
                 <span className={cn(
@@ -372,9 +414,16 @@ export function WeekView() {
                   "text-xs",
                   day.is_today ? "bg-primary text-primary-foreground px-1.5 py-0.5 rounded" : "text-muted-foreground"
                 )}>
-                  {new Date(day.date).getDate()}
+                  {new Date(day.date + 'T00:00:00').getDate()}
                 </span>
               </CardTitle>
+              {/* Cycle phase label */}
+              {season && (
+                <div className={cn("text-[10px] flex items-center gap-0.5 -mt-0.5", phaseTextColor[season])}>
+                  <span>{phaseInfo[season].emoji}</span>
+                  <span>{phaseInfo[season].short}</span>
+                </div>
+              )}
               {day.tasks.length > 0 && (
                 <div className="text-xs text-muted-foreground">
                   {day.summary.completed}/{day.summary.total} done
@@ -391,7 +440,8 @@ export function WeekView() {
               )}
             </CardContent>
           </Card>
-        ))}
+          )
+        })}
       </div>
 
       {/* Selected day detail panel */}
