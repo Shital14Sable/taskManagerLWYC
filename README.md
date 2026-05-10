@@ -1,6 +1,6 @@
 # TrackMind — Smart Task Manager
 
-> v1.3.2 · Local-first PWA · Energy & cycle-aware scheduling
+> v1.4.0 · Local-first PWA · Energy & cycle-aware scheduling
 
 TrackMind is an offline-capable, privacy-first task manager that schedules work around your natural energy — including your menstrual cycle. All data lives in your browser (IndexedDB) and optionally syncs to your own GitHub repository or Google Drive. No subscription. No central server.
 
@@ -10,9 +10,11 @@ TrackMind is an offline-capable, privacy-first task manager that schedules work 
 
 | Category | What's included |
 |---|---|
-| **Scheduling** | Priority + deadline + energy matching · Automatic breaks · Cycle-phase spreading across project deadlines |
-| **Cycle tracking** | 4 seasonal phases · Rolling average from period history · Manual override · Calendar overlays · Phase-aware task distribution |
-| **Projects** | Hierarchical projects · Deadline setting · "Distribute by Cycle" one-click spreading |
+| **Scheduling** | Priority + deadline + energy matching · Automatic breaks · Cycle-phase task spreading · Office hours time windows |
+| **Cycle tracking** | 4 seasonal phases · Rolling average from period history · Manual override · Phase banner in Today view · Calendar overlays (Today, Week, Month) |
+| **Projects** | Hierarchical projects · Inline deadline setting · "Distribute by Cycle" one-click spreading · Scheduled date shown per task |
+| **Office hours** | Restrict one project to a fixed time window (Mon–Fri 9–5, etc.) · Per-day toggles · Single-day overrides |
+| **Additional projects** | Restrict all non-office tasks to a separate time window · Same per-day + override controls |
 | **Habits** | Daily / weekly / monthly recurrence · Streak tracking · Pause & resume |
 | **Goals** | Yearly / quarterly / monthly · 7 categories · Linked to projects, tasks, habits · Vision board |
 | **Mood** | Per-block check-ins · Daily trends · Insights by time-of-day and day-of-week |
@@ -57,10 +59,13 @@ cd task_manager
 # Install dependencies
 pnpm install
 
+# Build core packages (required before first run)
+pnpm run build:packages
+
 # Start the development server
 pnpm --filter @trackmind/web dev
 
-# Or build for production
+# Or build everything for production
 pnpm build
 ```
 
@@ -81,11 +86,11 @@ The **Setup Wizard** launches automatically and guides you through:
 
 | View | Description |
 |---|---|
-| **Today** | Daily schedule · Habit check-ins · Task finder by time · Real-time progress |
-| **Week** | 7-column week grid · Cycle phase labels on each day · Energy icons per task |
-| **Month** | Full month grid · Phase timeline bar · Phase colour strips per day · Day detail on click |
+| **Today** | Daily schedule · Cycle phase banner below the date · Habit check-ins · Task finder by time |
+| **Week** | 7-column week grid · Tinted phase header per day · Phase name label · Energy icons per task |
+| **Month** | Full month grid · Phase background fill per cell · Phase timeline bar · Day detail on click |
 | **Projects** | Project list · Status filtering · Sub-project hierarchy |
-| **Project detail** | Task list · Stats · Quick-add · Set deadline · Distribute by Cycle |
+| **Project detail** | Task list with scheduled date/time · Stats · Quick-add · Set deadline · Distribute by Cycle |
 | **Habits** | All habits · Streak heatmap · Pause / resume |
 | **Goals** | Goal list + Vision Board · Time horizon filter · Progress bars |
 | **Lists** | Eternal, template, and quick lists · Category filtering |
@@ -98,33 +103,66 @@ The **Setup Wizard** launches automatically and guides you through:
 
 ---
 
-## Cycle tracking setup
+## Cycle tracking
+
+### Setup
 
 1. Open **Settings → Cycle** (gear icon in the header)
 2. Toggle **Enable cycle tracking** on
-3. Add your period start dates under **Period start dates** — more history improves accuracy
+3. Add your period start dates — more history improves accuracy
 4. The app computes a rolling average cycle length automatically (shown once you have 2+ dates)
 5. Use **Phase override** if your period arrived early or late
 
-Once enabled you'll see:
-- **Cycle Phase widget** in the Today sidebar — current season, energy level, best tasks, quick override dropdown
-- **Coloured strips** on every day in the MiniCalendar, Week view, and Month view
-- **Phase timeline bar** in Month view showing proportional phase segments across the month
+### What you'll see
+
+| Where | What |
+|---|---|
+| **Today view** | Coloured pill badge below the date: season emoji · phase name · cycle day · energy level · invitation |
+| **Week view** | Each day card header tinted in the phase colour · phase name label (e.g. 🌱 Follicular) |
+| **Month view** | Each day cell filled with a subtle phase tint · phase emoji in the corner · phase timeline bar across the top of the grid |
+| **Sidebar calendar** | 3 px coloured strip at the top of each day cell |
+| **Sidebar widget** | Full phase card: energy level · best tasks · quick override dropdown |
 
 ---
 
 ## Project deadline + cycle distribution
 
-1. Open any project → click **Set deadline** (below the project title)
+1. Open any project → click **Set deadline** below the project title
 2. Click **Distribute by Cycle**
-3. The app:
-   - Scores every task against all four phases using energy level, difficulty, priority, and keyword analysis of the task title and tags
-   - Assigns each task an evenly-spaced position across the full deadline window
-   - Snaps each task to the nearest phase-appropriate day
-4. The result shows a per-phase breakdown (e.g. ❄️ 2 · 🌱 5 · ☀️ 1 · 🍂 4)
+3. The app analyses every task using energy level, difficulty, priority, and keywords from the title and tags, then assigns each task an evenly-spaced slot across the full deadline window, snapping each to the nearest phase-appropriate day
+4. A per-phase breakdown is shown (e.g. ❄️ 2 · 🌱 5 · ☀️ 1 · 🍂 4)
 5. Go to Today view → **Reschedule All** to apply
 
-To undo the distribution, click **Reset dates** (appears after distributing).
+To undo, click **Reset dates** (appears after distributing).
+
+### Scheduled date in the task list
+
+Every task in the project list shows when it is scheduled:
+- **Blue text** — confirmed slot: `Today · 9:00am–10:00am`
+- **Muted italic** — date hint set but not yet scheduled: `Jun 15 (pending reschedule)`
+
+---
+
+## Office hours & additional project hours
+
+TrackMind lets you pin specific projects to fixed time windows so they never spill into personal time (or vice versa).
+
+### Office Hours
+
+Settings → Work Hours → **Office Hours** card:
+
+| Setting | Description |
+|---|---|
+| Enable toggle | Activates office-hours scheduling |
+| Project | The one project whose tasks are restricted to these hours |
+| Weekly schedule | Per-day enable toggle + start/end time (Mon–Sun, default Mon–Fri 09:00–17:00) |
+| Single-day overrides | Add a specific date with custom hours or mark it as closed (e.g. public holidays) |
+
+Tasks from the office project are withheld on closed days and placed only within the configured window during open days.
+
+### Additional Projects
+
+Settings → Work Hours → **Additional Projects** card — same controls but no project selector. When enabled, **all tasks that are not from the office project** are restricted to this window. Useful for separating focused work hours from other commitments.
 
 ---
 
@@ -132,14 +170,16 @@ To undo the distribution, click **Reset dates** (appears after distributing).
 
 The scheduler runs when you click **Reschedule All** in the Today view. It places tasks into available time slots, optimising for:
 
-- Deadline urgency (35 %)
-- Task priority (35 %)
-- Energy level match (15 %) — driven by the current cycle phase when tracking is enabled
-- Time fit (15 %)
+- Deadline urgency (35%)
+- Task priority (35%)
+- Energy level match (15%) — driven by the current cycle phase when tracking is enabled
+- Time fit (15%)
 
-**When cycle tracking is enabled**, the scheduler sees the current cycle phase energy for every time slot instead of the manually configured energy pattern blocks.
+**Cycle energy**: when cycle tracking is enabled, every time slot of the day gets the current phase's energy level (low / medium / high) instead of the manually configured per-hour energy blocks.
 
-Tasks with a `scheduled_for` date (set by Distribute by Cycle) only become visible to the scheduler on or after that date, so they're not front-loaded onto day one.
+**Date spreading**: tasks assigned a `scheduled_for` date (by Distribute by Cycle) are hidden from the scheduler until that date arrives, preventing front-loading.
+
+**Time windows**: tasks from the office project (and optionally all other tasks via Additional Projects) are hard-restricted to their configured hours — the scheduler will not place them outside that window.
 
 ---
 
@@ -156,8 +196,7 @@ Sync is debounced (30 s after the last change) and runs automatically every 5 mi
 
 ### Google Drive
 
-1. **Settings → Sync → Connect Google** — OAuth login
-2. Data is saved to your personal Drive
+**Settings → Sync → Connect Google** — OAuth login. Data is saved to your personal Drive.
 
 ### Export / Import
 
@@ -170,7 +209,7 @@ Sync is debounced (30 s after the last change) and runs automatically every 5 mi
 | Tab | Contents |
 |---|---|
 | **Sync** | GitHub + Google Drive auth · Manual sync / force push / pull · Pending changes |
-| **Work Hours** | Per-day start/end times · Copy-to-all-days · Scheduling preferences (max continuous work, min task duration) |
+| **Work Hours** | **Office Hours** card (project + per-day schedule + date overrides) · **Additional Projects** card (all other tasks, same controls) · Scheduling preferences (max continuous work, min task duration) |
 | **Cycle** | Enable toggle · Period history (add / remove dates) · Auto-computed average cycle length · Phase override |
 | **Data** | Export JSON · Import JSON · Clear all data |
 | **Help** | Documentation · Restart setup wizard · Help mode toggle |
@@ -212,8 +251,8 @@ taskManagerLWYC/
 ├── packages/
 │   ├── core/          # Data models, scheduler, gamification logic
 │   │   └── src/
-│   │       ├── models/    # Task, Project, Goal, Preferences (+ CyclePreferences), etc.
-│   │       └── services/  # Scheduler, GamificationService, AnalyticsService
+│   │       ├── models/    # Task, Project, Goal, Preferences (Cycle + OfficeHours), etc.
+│   │       └── services/  # Scheduler (time-window aware), GamificationService
 │   ├── storage/       # IndexedDB, SQLite, and in-memory storage adapters
 │   ├── sync/          # GitHub and Google Drive sync engines
 │   └── web/           # React frontend (PWA)
@@ -222,7 +261,7 @@ taskManagerLWYC/
 │           ├── components/  # UI components + sidebar widgets
 │           ├── hooks/       # Data access hooks (useTasks, useSchedule, etc.)
 │           ├── context/     # AppContext (global state, storage, sync)
-│           └── utils/       # cycle.ts (phase calculation + distribution)
+│           └── utils/       # cycle.ts (phase calc, distribution, office-hours overlay)
 ├── CLAUDE.md          # AI coding guidelines for this repo
 ├── setup.sh           # Installation script
 └── pnpm-workspace.yaml
@@ -243,19 +282,22 @@ taskManagerLWYC/
 ## Troubleshooting
 
 **Tasks all pile up on day one**
-After running Distribute by Cycle, you must click **Reschedule All** in the Today view. The scheduler extends its horizon to cover all assigned dates automatically.
+After running Distribute by Cycle, click **Reschedule All** in Today view. The scheduler automatically extends its horizon to cover all assigned dates.
 
-**Cycle phases not showing**
+**Cycle phases not showing in the calendar**
 Go to Settings → Cycle, enable tracking, and add at least one period start date.
 
-**Phase timeline bar not visible in Month view**
-Cycle tracking must be enabled with at least one period date entered.
+**Office-hours tasks scheduled outside the window**
+Check that Office Hours is enabled, a project is selected, and the correct days are toggled on. Then click Reschedule All.
 
 **PWA showing old version**
-The service worker updates automatically. To force it: open DevTools → Application → Service Workers → click **Update**, then refresh.
+The service worker updates automatically. To force it: DevTools → Application → Service Workers → click **Update**, then refresh. Or do a hard refresh (`Ctrl+Shift+R`).
 
 **Reset everything**
 Settings → Data → **Clear All Data** wipes all tasks, projects, schedules, and preferences.
+
+**Reset just a project's cycle distribution**
+Open the project → click **Reset dates** to clear all `scheduled_for` assignments on that project's tasks.
 
 ---
 
@@ -263,10 +305,11 @@ Settings → Data → **Clear All Data** wipes all tasks, projects, schedules, a
 
 1. Fork the repo
 2. `pnpm install`
-3. `pnpm --filter @trackmind/web dev` — starts the dev server with HMR
-4. Changes to `packages/core` or `packages/sync` require `pnpm run build:packages` and a dev server restart
+3. `pnpm run build:packages` — compile core packages
+4. `pnpm --filter @trackmind/web dev` — start the dev server with HMR
+5. Changes to `packages/core` or `packages/sync` require re-running `pnpm run build:packages` and restarting the dev server
 
-When making changes, follow the guidelines in [CLAUDE.md](CLAUDE.md) — particularly around version bumps, backward-compatible data model changes, and the local-first architecture constraints.
+Follow the guidelines in [CLAUDE.md](CLAUDE.md) — particularly around version bumps, backward-compatible data model changes, and the local-first architecture constraints.
 
 ---
 

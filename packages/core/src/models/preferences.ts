@@ -101,6 +101,7 @@ export interface UserPreferences {
   mood_blocks?: MoodBlock[];
   cycle?: CyclePreferences;
   office_hours?: OfficeHoursPreferences;
+  additional_projects_hours?: OfficeHoursPreferences;
 }
 
 export function createDefaultWorkHours(): Record<string, DayWorkHours> {

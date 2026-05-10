@@ -92,6 +92,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [newPeriodDate, setNewPeriodDate] = useState('')
   const [newOverrideDate, setNewOverrideDate] = useState('')
+  const [newOverrideDateAdditional, setNewOverrideDateAdditional] = useState('')
 
   // Sync handlers with error display
   const handleSync = async () => {
@@ -401,127 +402,10 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
               </TabsTrigger>
             </TabsList>
 
-            {/* Day Selector (only for work hours and energy tabs) */}
-            {activeTab === 'work-hours' && (
-              <div className="flex gap-1 justify-center">
-                {DAYS.map((day) => (
-                  <Button
-                    key={day}
-                    variant={selectedDay === day ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setSelectedDay(day)}
-                    className="px-2"
-                  >
-                    {DAY_LABELS[day]}
-                  </Button>
-                ))}
-              </div>
-            )}
-
             {/* Work Hours Tab */}
             <TabsContent value="work-hours" className="space-y-4">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base capitalize">{selectedDay} Work Hours</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Start Time</Label>
-                      <Input
-                        type="time"
-                        value={preferences.work_hours[selectedDay]?.start || '08:00'}
-                        onChange={(e) => updateWorkHours(selectedDay, 'start', e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>End Time</Label>
-                      <Input
-                        type="time"
-                        value={preferences.work_hours[selectedDay]?.end || '22:00'}
-                        onChange={(e) => updateWorkHours(selectedDay, 'end', e.target.value)}
-                      />
-                    </div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyToAllDays(selectedDay)}
-                  >
-                    Copy to all days
-                  </Button>
-                </CardContent>
-              </Card>
 
-              {/* Scheduling Settings */}
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Scheduling Settings</CardTitle>
-                  <CardDescription>
-                    Configure how tasks are scheduled
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Max Continuous Work Time (minutes)</Label>
-                    <div className="flex items-center gap-4">
-                      <Input
-                        type="number"
-                        min={30}
-                        max={480}
-                        step={15}
-                        value={preferences.scheduling_preferences?.max_deep_work_stretch ?? 120}
-                        onChange={(e) => {
-                          const value = Math.max(30, Math.min(480, parseInt(e.target.value) || 120))
-                          setPreferences({
-                            ...preferences,
-                            scheduling_preferences: {
-                              ...preferences.scheduling_preferences,
-                              max_deep_work_stretch: value,
-                            },
-                          })
-                        }}
-                        className="w-24"
-                      />
-                      <span className="text-sm text-muted-foreground">
-                        = {Math.floor((preferences.scheduling_preferences?.max_deep_work_stretch ?? 120) / 60)}h {(preferences.scheduling_preferences?.max_deep_work_stretch ?? 120) % 60}m
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      After this duration, a 15-minute break is automatically inserted. Tasks longer than this won't be scheduled.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Minimum Task Duration (minutes)</Label>
-                    <div className="flex items-center gap-4">
-                      <Input
-                        type="number"
-                        min={5}
-                        max={60}
-                        step={5}
-                        value={preferences.task_defaults?.min_duration ?? 15}
-                        onChange={(e) => {
-                          const value = Math.max(5, Math.min(60, parseInt(e.target.value) || 15))
-                          setPreferences({
-                            ...preferences,
-                            task_defaults: {
-                              ...preferences.task_defaults,
-                              min_duration: value,
-                            },
-                          })
-                        }}
-                        className="w-24"
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Tasks shorter than this won't be scheduled. They'll appear in the unscheduled list.
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Office Hours Card */}
+              {/* Office Hours Card — shown first */}
               {(() => {
                 const WEEKDAYS_OFFICE = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'] as const
                 const WEEKDAY_LABELS: Record<string, string> = {
@@ -585,7 +469,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base flex items-center gap-2">
                         <Briefcase className="h-4 w-4" />
-                        Office / Work Hours
+                        Office Hours
                       </CardTitle>
                       <CardDescription>
                         Tasks from a designated project will only be scheduled within these hours and on enabled days.
@@ -745,6 +629,263 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                   </Card>
                 )
               })()}
+
+              {/* Additional Projects Card */}
+              {(() => {
+                const WEEKDAYS_AP = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'] as const
+                const WEEKDAY_LABELS_AP: Record<string, string> = {
+                  monday:'Mon', tuesday:'Tue', wednesday:'Wed', thursday:'Thu',
+                  friday:'Fri', saturday:'Sat', sunday:'Sun',
+                }
+
+                const ap = preferences.additional_projects_hours
+                const defaultSchedule: Record<string, OfficeHoursDay> = {
+                  monday:    { enabled: true,  start: '09:00', end: '17:00' },
+                  tuesday:   { enabled: true,  start: '09:00', end: '17:00' },
+                  wednesday: { enabled: true,  start: '09:00', end: '17:00' },
+                  thursday:  { enabled: true,  start: '09:00', end: '17:00' },
+                  friday:    { enabled: true,  start: '09:00', end: '17:00' },
+                  saturday:  { enabled: false, start: '09:00', end: '17:00' },
+                  sunday:    { enabled: false, start: '09:00', end: '17:00' },
+                }
+
+                const updateAP = (patch: Partial<typeof ap>) =>
+                  setPreferences({
+                    ...preferences,
+                    additional_projects_hours: {
+                      enabled: ap?.enabled ?? false,
+                      schedule: ap?.schedule ?? defaultSchedule,
+                      date_overrides: ap?.date_overrides ?? {},
+                      project_id: ap?.project_id ?? null,
+                      ...patch,
+                    },
+                  })
+
+                const updateDay = (day: string, patch: Partial<OfficeHoursDay>) =>
+                  updateAP({
+                    schedule: {
+                      ...(ap?.schedule ?? defaultSchedule),
+                      [day]: { ...(ap?.schedule?.[day] ?? defaultSchedule[day]), ...patch },
+                    },
+                  })
+
+                const addDateOverride = () => {
+                  if (!newOverrideDateAdditional) return
+                  updateAP({
+                    date_overrides: {
+                      ...(ap?.date_overrides ?? {}),
+                      [newOverrideDateAdditional]: { enabled: true, start: '09:00', end: '17:00' },
+                    },
+                  })
+                  setNewOverrideDateAdditional('')
+                }
+
+                const updateDateOverride = (date: string, patch: Partial<OfficeHoursDay> | null) => {
+                  const overrides = { ...(ap?.date_overrides ?? {}) }
+                  if (patch === null) { delete overrides[date] }
+                  else { overrides[date] = { ...(overrides[date] ?? { enabled: true, start: '09:00', end: '17:00' }), ...patch } }
+                  updateAP({ date_overrides: overrides })
+                }
+
+                return (
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Briefcase className="h-4 w-4" />
+                        Additional Projects
+                      </CardTitle>
+                      <CardDescription>
+                        Schedule a second project within its own hours window.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+
+                      {/* Enable toggle */}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label className="text-sm font-medium">Enable additional project hours</Label>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Restricts a second project's tasks to a separate time window
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={ap?.enabled ?? false}
+                          onClick={() => updateAP({ enabled: !(ap?.enabled ?? false) })}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${ap?.enabled ? 'bg-primary' : 'bg-input'}`}
+                        >
+                          <span className={`inline-block h-4 w-4 transform rounded-full bg-background transition-transform ${ap?.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                        </button>
+                      </div>
+
+                      {ap?.enabled && (
+                        <>
+                          <p className="text-xs text-muted-foreground -mt-2">
+                            All tasks not belonging to the Office project will be scheduled within these hours.
+                          </p>
+
+                          {/* Per-day schedule */}
+                          <div className="space-y-2">
+                            <Label className="text-sm">Weekly schedule</Label>
+                            <div className="space-y-2">
+                              {WEEKDAYS_AP.map(day => {
+                                const cfg = ap?.schedule?.[day] ?? defaultSchedule[day]
+                                return (
+                                  <div key={day} className="flex items-center gap-3">
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={cfg.enabled}
+                                      onClick={() => updateDay(day, { enabled: !cfg.enabled })}
+                                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${cfg.enabled ? 'bg-primary' : 'bg-input'}`}
+                                    >
+                                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${cfg.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                    </button>
+                                    <span className={`text-sm w-8 shrink-0 ${cfg.enabled ? 'text-foreground' : 'text-muted-foreground'}`}>
+                                      {WEEKDAY_LABELS_AP[day]}
+                                    </span>
+                                    {cfg.enabled ? (
+                                      <div className="flex items-center gap-2">
+                                        <Input type="time" value={cfg.start} onChange={e => updateDay(day, { start: e.target.value })} className="h-7 w-28 text-xs" />
+                                        <span className="text-xs text-muted-foreground">to</span>
+                                        <Input type="time" value={cfg.end} onChange={e => updateDay(day, { end: e.target.value })} className="h-7 w-28 text-xs" />
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground italic">Closed</span>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Single-day date overrides */}
+                          <div className="space-y-2">
+                            <Label className="text-sm">Single-day overrides</Label>
+                            <p className="text-xs text-muted-foreground">
+                              Override hours for a specific date.
+                            </p>
+                            <div className="flex gap-2">
+                              <Input
+                                type="date"
+                                value={newOverrideDateAdditional}
+                                onChange={e => setNewOverrideDateAdditional(e.target.value)}
+                                className="h-8 w-44 text-sm"
+                                onKeyDown={e => e.key === 'Enter' && addDateOverride()}
+                              />
+                              <Button size="sm" variant="outline" onClick={addDateOverride} disabled={!newOverrideDateAdditional} className="h-8 gap-1">
+                                <Plus className="h-3 w-3" />
+                                Add
+                              </Button>
+                            </div>
+                            {Object.keys(ap?.date_overrides ?? {}).sort().length > 0 && (
+                              <div className="space-y-2 max-h-40 overflow-y-auto rounded-md border p-2">
+                                {Object.entries(ap?.date_overrides ?? {}).sort().map(([date, cfg]) => (
+                                  <div key={date} className="flex items-center gap-2 text-sm">
+                                    <span className="text-muted-foreground w-24 shrink-0 text-xs">
+                                      {new Date(date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={cfg?.enabled ?? true}
+                                      onClick={() => updateDateOverride(date, { enabled: !(cfg?.enabled ?? true) })}
+                                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${cfg?.enabled ? 'bg-primary' : 'bg-input'}`}
+                                    >
+                                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background transition-transform ${cfg?.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                    </button>
+                                    {cfg?.enabled ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <Input type="time" value={cfg?.start ?? '09:00'} onChange={e => updateDateOverride(date, { start: e.target.value })} className="h-7 w-24 text-xs" />
+                                        <span className="text-xs text-muted-foreground">–</span>
+                                        <Input type="time" value={cfg?.end ?? '17:00'} onChange={e => updateDateOverride(date, { end: e.target.value })} className="h-7 w-24 text-xs" />
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-muted-foreground italic">Closed</span>
+                                    )}
+                                    <Button variant="ghost" size="sm" className="h-5 w-5 p-0 hover:text-destructive ml-auto" onClick={() => updateDateOverride(date, null)}>
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              })()}
+
+              {/* Scheduling Settings */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Scheduling Settings</CardTitle>
+                  <CardDescription>
+                    Configure how tasks are scheduled
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Max Continuous Work Time (minutes)</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        type="number"
+                        min={30}
+                        max={480}
+                        step={15}
+                        value={preferences.scheduling_preferences?.max_deep_work_stretch ?? 120}
+                        onChange={(e) => {
+                          const value = Math.max(30, Math.min(480, parseInt(e.target.value) || 120))
+                          setPreferences({
+                            ...preferences,
+                            scheduling_preferences: {
+                              ...preferences.scheduling_preferences,
+                              max_deep_work_stretch: value,
+                            },
+                          })
+                        }}
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">
+                        = {Math.floor((preferences.scheduling_preferences?.max_deep_work_stretch ?? 120) / 60)}h {(preferences.scheduling_preferences?.max_deep_work_stretch ?? 120) % 60}m
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      After this duration, a 15-minute break is automatically inserted. Tasks longer than this won't be scheduled.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Minimum Task Duration (minutes)</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        type="number"
+                        min={5}
+                        max={60}
+                        step={5}
+                        value={preferences.task_defaults?.min_duration ?? 15}
+                        onChange={(e) => {
+                          const value = Math.max(5, Math.min(60, parseInt(e.target.value) || 15))
+                          setPreferences({
+                            ...preferences,
+                            task_defaults: {
+                              ...preferences.task_defaults,
+                              min_duration: value,
+                            },
+                          })
+                        }}
+                        className="w-24"
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Tasks shorter than this won't be scheduled. They'll appear in the unscheduled list.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
             </TabsContent>
 
             {/* Sync Tab */}

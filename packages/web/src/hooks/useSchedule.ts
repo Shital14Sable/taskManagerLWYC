@@ -311,26 +311,38 @@ export function useSchedule(date?: string) {
           return t.scheduled_for.split('T')[0] <= targetDate;
         });
 
-        // Apply office-hours constraints.
-        // Tasks from the designated office project get time_window_start/end set so the
-        // scheduler only places them within the office window for that day.
-        // On days when the office is closed the tasks are withheld entirely.
+        // Apply office-hours and additional-project-hours constraints.
+        // Tasks from designated projects get time_window_start/end set so the scheduler
+        // only places them within their configured window. They are withheld on closed days.
         const officeHours = effectivePrefs.office_hours;
         const officeProjectId = officeHours?.project_id ?? null;
         const officeWindowForDay = officeProjectId && officeHours
           ? getOfficeHoursForDate(scheduleDate, officeHours)
           : null;
 
+        // Additional projects hours apply to ALL tasks that are NOT from the office project.
+        const additionalHours = effectivePrefs.additional_projects_hours;
+        const additionalWindowForDay =
+          additionalHours?.enabled ? getOfficeHoursForDate(scheduleDate, additionalHours) : null;
+
         const tasksForDate = baseTasksForDate
           .filter(t => {
-            if (!officeProjectId || t.project_id !== officeProjectId) return true;
-            // Office task: only include when office is open today
-            return officeWindowForDay !== null;
+            // Office project: only schedule on open office days
+            if (officeProjectId && t.project_id === officeProjectId) return officeWindowForDay !== null;
+            // All other tasks: restricted to additional hours window when enabled
+            if (additionalHours?.enabled) return additionalWindowForDay !== null;
+            return true;
           })
           .map(t => {
-            if (!officeProjectId || t.project_id !== officeProjectId || !officeWindowForDay) return t;
-            // Annotate with the office window so the scheduler hard-restricts the time
-            return { ...t, time_window_start: officeWindowForDay.start, time_window_end: officeWindowForDay.end };
+            // Office project: annotate with office window
+            if (officeProjectId && t.project_id === officeProjectId && officeWindowForDay) {
+              return { ...t, time_window_start: officeWindowForDay.start, time_window_end: officeWindowForDay.end };
+            }
+            // All other tasks: annotate with additional hours window when enabled
+            if (additionalHours?.enabled && additionalWindowForDay) {
+              return { ...t, time_window_start: additionalWindowForDay.start, time_window_end: additionalWindowForDay.end };
+            }
+            return t;
           });
 
         const generatedSchedule = scheduler.generateSchedule({
