@@ -237,6 +237,10 @@ export class MemoryStorage implements StorageAdapter {
     this.habitInstances.set(key, instance);
   }
 
+  async deleteHabitInstance(habitId: string, date: string): Promise<void> {
+    this.habitInstances.delete(`${habitId}:${date}`);
+  }
+
   // Journal Entries
   async getJournalEntries(): Promise<JournalEntry[]> {
     return Array.from(this.journalEntries.values());

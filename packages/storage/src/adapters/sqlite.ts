@@ -190,6 +190,10 @@ export class SQLiteStorage implements StorageAdapter {
     throw new Error('Not implemented');
   }
 
+  async deleteHabitInstance(_habitId: string, _date: string): Promise<void> {
+    throw new Error('Not implemented');
+  }
+
   // Journal Entries
   async getJournalEntries(): Promise<JournalEntry[]> {
     throw new Error('Not implemented');

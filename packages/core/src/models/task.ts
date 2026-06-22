@@ -3,13 +3,16 @@ import { v4 as uuidv4 } from 'uuid';
 export type TaskStatus = 'todo' | 'in_progress' | 'completed' | 'blocked';
 export type EnergyLevel = 'low' | 'medium' | 'high';
 export type PinType = 'soft' | 'hard';
-export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly';
+export type RecurrenceFrequency = 'daily' | 'weekly' | 'biweekly' | 'monthly';
 
 export interface Recurrence {
   frequency: RecurrenceFrequency | null;
   days_of_week: string[];  // ["Monday", "Wednesday"]
   time_of_day: string | null;  // "14:00"
   end_date: string | null;  // ISO date string
+  // Anchor date (YYYY-MM-DD) used to compute the on/off week cadence for
+  // 'biweekly' recurrence. Defaults to the task's created_at date if unset.
+  start_date?: string | null;
 }
 
 export interface Task {
@@ -99,6 +102,7 @@ export function createDefaultRecurrence(): Recurrence {
     days_of_week: [],
     time_of_day: null,
     end_date: null,
+    start_date: null,
   };
 }
 

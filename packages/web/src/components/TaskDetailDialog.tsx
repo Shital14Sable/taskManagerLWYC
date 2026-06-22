@@ -20,6 +20,7 @@ interface TaskDetailDialogProps {
   onClose: () => void
   onEdit: (task: Task) => void
   onComplete?: (taskId: string) => void
+  onUncomplete?: (taskId: string) => void
   isCompleted?: boolean
 }
 
@@ -89,6 +90,7 @@ export function TaskDetailDialog({
   onClose,
   onEdit,
   onComplete,
+  onUncomplete,
   isCompleted,
 }: TaskDetailDialogProps) {
   if (!task) return null
@@ -238,6 +240,18 @@ export function TaskDetailDialog({
             >
               <CheckCircle className="h-4 w-4 mr-2" />
               Complete
+            </Button>
+          )}
+          {onUncomplete && isCompleted && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                onUncomplete(task.id)
+                onClose()
+              }}
+            >
+              <CheckCircle className="h-4 w-4 mr-2" />
+              Mark Incomplete
             </Button>
           )}
           <Button onClick={() => {

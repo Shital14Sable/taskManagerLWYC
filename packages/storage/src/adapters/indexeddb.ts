@@ -582,6 +582,19 @@ export class IndexedDBStorage implements StorageAdapter {
     });
   }
 
+  async deleteHabitInstance(habitId: string, date: string): Promise<void> {
+    const key = `${habitId}:${date}`;
+    await this.db.habitInstances.delete(key);
+    await this.addPendingChange({
+      id: uuidv4(),
+      type: 'habit_instance',
+      operation: 'delete',
+      entityId: key,
+      timestamp: new Date().toISOString(),
+      data: null,
+    });
+  }
+
   // Journal Entries
   async getJournalEntries(): Promise<JournalEntry[]> {
     try {

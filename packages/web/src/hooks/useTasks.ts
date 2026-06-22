@@ -39,7 +39,7 @@ export interface CreateTaskInput {
 }
 
 export function useTasks(projectId?: string) {
-  const { tasks, saveTask, deleteTask: removeTask, stats, saveStats, saveHabitInstance, schedules, saveSchedule } = useApp();
+  const { tasks, saveTask, deleteTask: removeTask, stats, saveStats, saveHabitInstance, deleteHabitInstance, schedules, saveSchedule } = useApp();
   const [lastXPGain, setLastXPGain] = useState<XPGain | null>(null);
 
   // Filter tasks by project if specified
@@ -211,6 +211,82 @@ export function useTasks(projectId?: string) {
     return completed;
   }, [tasks, stats, saveTask, saveStats, saveHabitInstance, schedules, saveSchedule]);
 
+  /**
+   * Mark a task as incomplete — the reverse of completeTask, used to toggle the
+   * completion checkbox back off.
+   * @param id - Task ID
+   * @param options - Optional settings
+   * @param options.forDate - For habits: the scheduled date to remove completion from (defaults to today).
+   */
+  const uncompleteTask = useCallback(async (id: string, options?: { forDate?: string }): Promise<Task> => {
+    const existing = tasks.find(t => t.id === id);
+    if (!existing) {
+      throw new Error(`Task ${id} not found`);
+    }
+
+    const now = new Date().toISOString();
+    const today = new Date();
+    const localTodayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const habitDate = options?.forDate || localTodayDate;
+
+    let reverted: Task;
+
+    if (existing.is_habit) {
+      // Habits stay 'todo' since they recur — undo by removing the day's HabitInstance record.
+      reverted = { ...existing, updated_at: now };
+      await deleteHabitInstance(existing.id, habitDate);
+    } else {
+      reverted = {
+        ...existing,
+        status: 'todo',
+        completed_at: null,
+        updated_at: now,
+      };
+    }
+
+    // Reverse only the XP/stats this one completion granted, so toggling the
+    // checkbox back and forth can't be used to farm XP. Badges and longest_streak
+    // are intentionally left as-is — once earned, they stay earned.
+    const xpToRemove = calculateXP(existing.difficulty, existing.estimated_minutes, existing.is_habit);
+    const newTotalXP = Math.max(0, stats.total_xp - xpToRemove);
+    const newStats = {
+      ...stats,
+      total_xp: newTotalXP,
+      level: calculateLevel(newTotalXP),
+      tasks_completed: Math.max(0, stats.tasks_completed - 1),
+      habits_completed: existing.is_habit ? Math.max(0, stats.habits_completed - 1) : stats.habits_completed,
+      current_streak: Math.max(0, stats.current_streak - 1),
+    };
+
+    await saveTask(reverted);
+    await saveStats(newStats);
+
+    // Remove the task from the day's schedule completion list
+    const scheduleDate = existing.is_habit ? habitDate : localTodayDate;
+    const targetSchedule = schedules.get(scheduleDate);
+    if (targetSchedule && targetSchedule.completed_tasks?.includes(id)) {
+      const currentCompleted = targetSchedule.summary?.tasks_completed ?? 0;
+      const currentRemaining = targetSchedule.summary?.tasks_remaining ?? 0;
+      const totalTasks = currentCompleted + currentRemaining;
+      const newCompleted = Math.max(0, currentCompleted - 1);
+      const newRemaining = currentRemaining + 1;
+
+      const updatedSchedule = {
+        ...targetSchedule,
+        completed_tasks: targetSchedule.completed_tasks.filter(taskId => taskId !== id),
+        summary: {
+          ...targetSchedule.summary,
+          tasks_completed: newCompleted,
+          tasks_remaining: newRemaining,
+          completion_rate: totalTasks > 0 ? (newCompleted / totalTasks) * 100 : 0,
+        },
+      };
+      await saveSchedule(updatedSchedule);
+    }
+
+    return reverted;
+  }, [tasks, stats, saveTask, saveStats, deleteHabitInstance, schedules, saveSchedule]);
+
   const clearXPGain = useCallback(() => {
     setLastXPGain(null);
   }, []);
@@ -238,6 +314,7 @@ export function useTasks(projectId?: string) {
     updateTask,
     deleteTask: removeTask,
     completeTask,
+    uncompleteTask,
     lastXPGain,
     clearXPGain,
   };

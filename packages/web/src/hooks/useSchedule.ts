@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import type { Schedule } from '@trackmind/core';
-import { Scheduler, createDefaultPreferences, toISODateString } from '@trackmind/core';
+import { Scheduler, createDefaultPreferences, createSchedule, toISODateString } from '@trackmind/core';
 import type { OfficeHoursDay, OfficeHoursPreferences } from '@trackmind/core';
 import { applyEffectiveEnergyToPrefs } from '@/utils/cycle';
 
@@ -269,20 +269,56 @@ export function useSchedule(date?: string) {
       // - Base estimate from task count
       // - Extended to cover the furthest scheduled_for date (set by cycle distribution)
       //   so tasks assigned to day 20 or 60 aren't silently dropped.
+      // - Extended to cover the furthest task or project deadline, so the schedule
+      //   horizon always reaches anything you've actually committed a date to —
+      //   even when there are too few tasks for the count-based estimate to reach it.
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const nonHabitTasks = activeTasks.filter(t => !t.is_habit);
       const estimatedDaysNeeded = Math.ceil(nonHabitTasks.length / 6);
 
+      const daysUntil = (dateStr: string): number => {
+        const d = new Date(dateStr.split('T')[0] + 'T00:00:00');
+        d.setHours(0, 0, 0, 0);
+        return Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      };
+
       const furthestScheduledForDays = activeTasks.reduce((max, t) => {
         if (!t.scheduled_for || (t.is_pinned && t.pin_type === 'hard')) return max;
-        const sfDate = new Date(t.scheduled_for.split('T')[0] + 'T00:00:00');
-        sfDate.setHours(0, 0, 0, 0);
-        const ahead = Math.ceil((sfDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        return Math.max(max, ahead);
+        return Math.max(max, daysUntil(t.scheduled_for));
       }, 0);
 
-      const days = options?.days ?? Math.min(180, Math.max(estimatedDaysNeeded + 3, furthestScheduledForDays + 1));
+      const furthestTaskDeadlineDays = activeTasks.reduce((max, t) => {
+        if (!t.deadline) return max;
+        return Math.max(max, daysUntil(t.deadline));
+      }, 0);
+
+      const furthestProjectDeadlineDays = projects.reduce((max, p) => {
+        if (!p.deadline || p.status !== 'active') return max;
+        return Math.max(max, daysUntil(p.deadline));
+      }, 0);
+
+      // Habits recur on a weekly/biweekly cadence. If the horizon is shorter than
+      // 14 days, a habit whose day-of-week falls late in the window (e.g. a weekly
+      // Friday habit when today is Monday) may never be evaluated at all, even
+      // though its recurrence is configured correctly. Enforce a floor of 14 days
+      // whenever any active habit has a weekly or biweekly recurrence, so every
+      // such habit gets at least one full cycle to occur within the horizon.
+      const hasWeeklyOrBiweeklyHabit = activeTasks.some(
+        t => t.is_habit && (t.recurrence?.frequency === 'weekly' || t.recurrence?.frequency === 'biweekly')
+      );
+      const habitFloorDays = hasWeeklyOrBiweeklyHabit ? 14 : 0;
+
+      const days = options?.days ?? Math.min(
+        180,
+        Math.max(
+          estimatedDaysNeeded + 3,
+          furthestScheduledForDays + 1,
+          furthestTaskDeadlineDays + 1,
+          furthestProjectDeadlineDays + 1,
+          habitFloorDays,
+        )
+      );
 
       // Generate schedules for each day, tracking which tasks are already scheduled
       const newSchedules: Schedule[] = [];
@@ -327,6 +363,9 @@ export function useSchedule(date?: string) {
 
         const tasksForDate = baseTasksForDate
           .filter(t => {
+            // Fixed-time tasks (hard-pinned) always override office-hours / additional-hours
+            // restrictions — they have an explicit scheduled_for and must never be withheld.
+            if (t.is_pinned && t.pin_type === 'hard') return true;
             // Office project: only schedule on open office days
             if (officeProjectId && t.project_id === officeProjectId) return officeWindowForDay !== null;
             // All other tasks: restricted to additional hours window when enabled
@@ -334,6 +373,8 @@ export function useSchedule(date?: string) {
             return true;
           })
           .map(t => {
+            // Fixed-time tasks: never annotate with a time window — they bypass it entirely.
+            if (t.is_pinned && t.pin_type === 'hard') return t;
             // Office project: annotate with office window
             if (officeProjectId && t.project_id === officeProjectId && officeWindowForDay) {
               return { ...t, time_window_start: officeWindowForDay.start, time_window_end: officeWindowForDay.end };
@@ -385,6 +426,41 @@ export function useSchedule(date?: string) {
     return upcomingData.task_schedule_map[taskId] || null;
   }, [upcomingData]);
 
+  /**
+   * Remove a task/habit from a single day's schedule without affecting any
+   * other day. The item stays fully eligible for every other date — clicking
+   * "Reschedule All" again will not bring it back to this specific day, but
+   * a regular task remains free to land on a future day, and a habit will
+   * still occur normally on its next scheduled day.
+   */
+  const skipTaskForDate = useCallback(async (taskId: string, dateStr: string) => {
+    const existing = schedules.get(dateStr) ?? createSchedule(dateStr);
+
+    if (existing.skipped_task_ids?.includes(taskId)) return; // already skipped
+
+    const removedEntry = existing.scheduled_tasks.find(st => st.task_id === taskId);
+    const remainingScheduled = existing.scheduled_tasks.filter(st => st.task_id !== taskId);
+
+    const currentCompleted = existing.summary?.tasks_completed ?? 0;
+    const currentRemaining = existing.summary?.tasks_remaining ?? 0;
+    // Only adjust "remaining" count — a skipped task was never completed today.
+    const newRemaining = removedEntry ? Math.max(0, currentRemaining - 1) : currentRemaining;
+    const totalTasks = currentCompleted + newRemaining;
+
+    const updated: Schedule = {
+      ...existing,
+      scheduled_tasks: remainingScheduled,
+      skipped_task_ids: [...(existing.skipped_task_ids ?? []), taskId],
+      summary: {
+        ...existing.summary,
+        tasks_remaining: newRemaining,
+        completion_rate: totalTasks > 0 ? (currentCompleted / totalTasks) * 100 : 0,
+      },
+    };
+
+    await saveSchedules([updated]);
+  }, [schedules, saveSchedules]);
+
   return {
     schedule,
     upcomingData,
@@ -403,5 +479,6 @@ export function useSchedule(date?: string) {
     reschedule,
     generateSchedules,
     getScheduledDate,
+    skipTaskForDate,
   };
 }

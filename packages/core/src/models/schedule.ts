@@ -28,6 +28,11 @@ export interface ScheduledTask {
   estimated_minutes: number;
   is_buffer: boolean;
   auto_scheduled: boolean;
+  // Conflict tracking: when a fixed-time task/habit/meeting overlaps another one,
+  // both are kept (never silently dropped) and tagged with a shared group id so the
+  // UI can render them side by side. conflict_rank 0 = highest priority in the group.
+  conflict_group?: string;
+  conflict_rank?: number;
 }
 
 export interface ScheduleSummary {
@@ -45,6 +50,10 @@ export interface Schedule {
   constraints: ScheduleConstraints;
   scheduled_tasks: ScheduledTask[];
   completed_tasks: string[];
+  // Task/habit IDs explicitly removed from THIS day only (via "Skip for today" in
+  // the UI). Persists across regenerations for this date so re-scheduling doesn't
+  // bring the item back — it remains eligible on every other day.
+  skipped_task_ids?: string[];
   summary: ScheduleSummary;
   generated_at: string;  // ISO datetime string
   last_rescheduled_at: string | null;  // ISO datetime string
@@ -89,6 +98,7 @@ export function createSchedule(date: string): Schedule {
     constraints: createDefaultScheduleConstraints(),
     scheduled_tasks: [],
     completed_tasks: [],
+    skipped_task_ids: [],
     summary: createDefaultScheduleSummary(),
     generated_at: new Date().toISOString(),
     last_rescheduled_at: null,

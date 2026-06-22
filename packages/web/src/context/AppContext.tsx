@@ -115,6 +115,7 @@ interface AppContextValue {
   getHabitInstances: (date: string) => Promise<HabitInstance[]>;
   getHabitInstancesByHabit: (habitId: string, startDate?: string, endDate?: string) => Promise<HabitInstance[]>;
   saveHabitInstance: (instance: HabitInstance) => Promise<void>;
+  deleteHabitInstance: (habitId: string, date: string) => Promise<void>;
 
   // Data - Journal Entries
   journalEntries: JournalEntry[];
@@ -993,6 +994,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [storage, triggerDebouncedSync]);
 
+  const deleteHabitInstance = useCallback(async (habitId: string, date: string) => {
+    if (!storage) return;
+    await storage.deleteHabitInstance(habitId, date);
+    triggerDebouncedSync();
+  }, [storage, triggerDebouncedSync]);
+
   // Journal Entry handlers
   const loadJournalEntries = useCallback(async () => {
     if (!storage) return;
@@ -1179,6 +1186,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     getHabitInstances,
     getHabitInstancesByHabit,
     saveHabitInstance,
+    deleteHabitInstance,
     journalEntries,
     loadJournalEntries,
     saveJournalEntry,

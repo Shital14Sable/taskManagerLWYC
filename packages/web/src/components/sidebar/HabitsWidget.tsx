@@ -38,7 +38,28 @@ const DAY_NAMES_LOWERCASE = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursd
 /**
  * Check if a habit is scheduled for a specific date based on its recurrence settings
  */
-function isHabitScheduledForDate(habit: { recurrence?: { frequency?: string; days_of_week?: string[]; end_date?: string }; is_paused?: boolean }, date: Date): boolean {
+function isBiweeklyOnWeek(
+  habit: { recurrence?: { start_date?: string | null }; created_at?: string },
+  date: Date
+): boolean {
+  const anchorStr = habit.recurrence?.start_date ?? habit.created_at?.split('T')[0];
+  if (!anchorStr) return true;
+  const anchor = new Date(anchorStr + 'T00:00:00');
+  const anchorMidnight = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+  const targetMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const daysDiff = Math.floor((targetMidnight.getTime() - anchorMidnight.getTime()) / (1000 * 60 * 60 * 24));
+  if (daysDiff < 0) return false;
+  return Math.floor(daysDiff / 7) % 2 === 0;
+}
+
+function isHabitScheduledForDate(
+  habit: {
+    recurrence?: { frequency?: string; days_of_week?: string[]; end_date?: string; start_date?: string | null };
+    is_paused?: boolean;
+    created_at?: string;
+  },
+  date: Date
+): boolean {
   // Paused habits don't count
   if (habit.is_paused) return false;
 
@@ -52,12 +73,29 @@ function isHabitScheduledForDate(habit: { recurrence?: { frequency?: string; day
   }
 
   const dayName = DAY_NAMES_LOWERCASE[date.getDay()];
+  const isBiweekly = habit.recurrence.frequency === 'biweekly';
+
+  // If specific days are set, always respect them regardless of frequency label
+  if (habit.recurrence.days_of_week && habit.recurrence.days_of_week.length > 0) {
+    const dayMatches = habit.recurrence.days_of_week.map(d => d.toLowerCase()).includes(dayName);
+    if (!dayMatches) return false;
+    return isBiweekly ? isBiweeklyOnWeek(habit, date) : true;
+  }
 
   if (habit.recurrence.frequency === 'daily') {
     return true;
-  } else if (habit.recurrence.frequency === 'weekly') {
-    const scheduledDays = habit.recurrence.days_of_week || [];
-    return scheduledDays.map(d => d.toLowerCase()).includes(dayName);
+  }
+
+  // Weekly/biweekly with no explicit days selected: default to the day-of-week
+  // of the recurrence anchor (start_date, or the task's creation date) instead
+  // of never occurring.
+  if (habit.recurrence.frequency === 'weekly' || isBiweekly) {
+    const anchorStr = habit.recurrence.start_date ?? habit.created_at?.split('T')[0];
+    if (anchorStr) {
+      const anchorDayName = DAY_NAMES_LOWERCASE[new Date(anchorStr + 'T00:00:00').getDay()];
+      if (anchorDayName !== dayName) return false;
+      return isBiweekly ? isBiweeklyOnWeek(habit, date) : true;
+    }
   }
 
   return false;

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { RefreshCw, Calendar, CheckCircle, Clock, Flame, Zap, Moon, Target, UtensilsCrossed, ChevronLeft, ChevronRight, FolderOpen, ListTodo, Repeat, Edit2 } from 'lucide-react'
+import { RefreshCw, Calendar, CheckCircle, Clock, Flame, Zap, Moon, Target, UtensilsCrossed, ChevronLeft, ChevronRight, FolderOpen, ListTodo, Repeat, Edit2, AlertCircle, CalendarX } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -118,6 +118,8 @@ interface TodayViewProps {
   loading: boolean
   onReschedule: () => Promise<void>
   onCompleteTask: (id: string, forDate?: string) => void
+  onUncompleteTask?: (id: string, forDate?: string) => void
+  onSkipTask?: (id: string, date: string) => void
   onEditTask: (task: Task) => void
   selectedDate?: string // YYYY-MM-DD format
   onDateChange?: (date: string) => void
@@ -136,6 +138,8 @@ export function TodayView({
   loading,
   onReschedule,
   onCompleteTask,
+  onUncompleteTask,
+  onSkipTask,
   onEditTask,
   selectedDate,
   onDateChange,
@@ -476,6 +480,41 @@ export function TodayView({
     })
   }, [schedule?.scheduled_tasks, scheduleFilter, tasks])
 
+  // Group time-conflicting fixed-time items (same conflict_group, assigned by the
+  // scheduler) so they can render side by side instead of one silently disappearing.
+  // Buffers and non-conflicting items remain singleton groups, rendered exactly as before.
+  const renderGroups = useMemo(() => {
+    const groups: Array<{ items: ScheduledTask[]; indices: number[] }> = []
+    let i = 0
+    while (i < filteredScheduledTasks.length) {
+      const item = filteredScheduledTasks[i]
+      if (item.is_buffer || !item.conflict_group) {
+        groups.push({ items: [item], indices: [i] })
+        i++
+        continue
+      }
+      const groupId = item.conflict_group
+      const clusterItems: ScheduledTask[] = [item]
+      const clusterIndices: number[] = [i]
+      let j = i + 1
+      while (j < filteredScheduledTasks.length && filteredScheduledTasks[j].conflict_group === groupId) {
+        clusterItems.push(filteredScheduledTasks[j])
+        clusterIndices.push(j)
+        j++
+      }
+      // Sort by conflict_rank ascending (0 = highest priority, shown first)
+      const order = clusterItems
+        .map((_, idx) => idx)
+        .sort((a, b) => (clusterItems[a].conflict_rank ?? 0) - (clusterItems[b].conflict_rank ?? 0))
+      groups.push({
+        items: order.map(idx => clusterItems[idx]),
+        indices: order.map(idx => clusterIndices[idx]),
+      })
+      i = j
+    }
+    return groups
+  }, [filteredScheduledTasks])
+
   // Find next upcoming task (handles overnight schedules)
   const findNextTask = (): ScheduledTask | null => {
     if (!schedule) return null
@@ -794,7 +833,98 @@ export function TodayView({
                       compact
                     />
                   ) : (
-                    filteredScheduledTasks.map((scheduled, index) => {
+                    renderGroups.map((group, groupIdx) => {
+                    // Time-conflicting items (multiple fixed-time tasks/habits/meetings
+                    // overlapping the same slot) render side by side, ordered by priority,
+                    // instead of one silently disappearing.
+                    if (group.items.length > 1) {
+                      return (
+                        <div key={`conflict-${group.items[0].conflict_group}-${groupIdx}`} className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-2">
+                          <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-medium mb-1.5 px-1">
+                            <AlertCircle className="h-3 w-3" />
+                            Time conflict — {formatTime(group.items[0].start_time)}
+                          </div>
+                          <div className="flex gap-2 overflow-x-auto">
+                            {group.items.map((scheduled, idx) => {
+                              const index = group.indices[idx]
+                              const task = getTaskById(scheduled.task_id)
+                              const completed = isTaskCompleted(scheduled.task_id)
+                              const isCurrentTaskRow = currentTimeIndicator?.taskIndex === index
+                              const project = task ? getProjectById(task.project_id) : null
+                              const isTopPriority = (scheduled.conflict_rank ?? 0) === 0
+
+                              return (
+                                <div
+                                  key={scheduled.task_id}
+                                  className={cn(
+                                    "group relative flex-1 min-w-[180px] rounded-md border p-2.5 cursor-pointer transition-all",
+                                    completed ? "bg-green-500/10 border-green-500/30" : "hover:shadow-sm",
+                                    isTopPriority && !completed && "ring-1 ring-primary/40"
+                                  )}
+                                  style={{
+                                    borderLeftWidth: project?.color ? '4px' : undefined,
+                                    borderLeftColor: project?.color || undefined,
+                                  }}
+                                  onClick={() => handleTaskClick(scheduled)}
+                                >
+                                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                                    <span className={cn("font-medium text-sm truncate", completed && "line-through text-muted-foreground")}>
+                                      {task?.title || 'Unknown Task'}
+                                    </span>
+                                    {isTopPriority && !completed && (
+                                      <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-primary/40 text-primary shrink-0">
+                                        priority
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <span className="font-mono">{formatTime(scheduled.start_time)}–{formatTime(scheduled.end_time)}</span>
+                                    {task && energyIcons[task.energy_level as keyof typeof energyIcons]}
+                                    {task?.is_habit && <UtensilsCrossed className="h-3 w-3" />}
+                                  </div>
+                                  {isCurrentTaskRow && !completed && currentTimeIndicator.remainingMinutes > 0 && (
+                                    <span className="text-xs text-red-500 font-medium">
+                                      {formatDuration(currentTimeIndicator.remainingMinutes)} left
+                                    </span>
+                                  )}
+                                  {!completed && onSkipTask && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        onSkipTask(scheduled.task_id, currentDate)
+                                      }}
+                                      className="absolute top-2 right-8 w-5 h-5 rounded-full flex items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                                      title="Skip for today only"
+                                    >
+                                      <CalendarX className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      completed
+                                        ? onUncompleteTask?.(scheduled.task_id, task?.is_habit ? currentDate : undefined)
+                                        : onCompleteTask(scheduled.task_id, task?.is_habit ? currentDate : undefined)
+                                    }}
+                                    className={cn(
+                                      "absolute top-2 right-2 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors",
+                                      completed
+                                        ? "bg-green-500 border-green-500 text-white"
+                                        : "border-muted-foreground hover:border-primary hover:bg-primary/10"
+                                    )}
+                                  >
+                                    {completed && <CheckCircle className="h-3 w-3" />}
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    const scheduled = group.items[0]
+                    const index = group.indices[0]
                     const task = getTaskById(scheduled.task_id)
                     const completed = isTaskCompleted(scheduled.task_id)
                     const isPast = !completed && isTaskInPast(scheduled)
@@ -870,7 +1000,7 @@ export function TodayView({
                         )}
                         <div
                           className={cn(
-                            "relative flex items-center gap-4 py-3 px-4 border transition-all cursor-pointer",
+                            "group relative flex items-center gap-4 py-3 px-4 border transition-all cursor-pointer",
                             completed
                               ? "bg-green-500/10 border-green-500/30"
                               : isPast
@@ -892,7 +1022,9 @@ export function TodayView({
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              !completed && onCompleteTask(scheduled.task_id, task?.is_habit ? currentDate : undefined)
+                              completed
+                                ? onUncompleteTask?.(scheduled.task_id, task?.is_habit ? currentDate : undefined)
+                                : onCompleteTask(scheduled.task_id, task?.is_habit ? currentDate : undefined)
                             }}
                             className={cn(
                               "flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors",
@@ -987,6 +1119,22 @@ export function TodayView({
                           <div className="w-20 font-mono text-xs text-muted-foreground">
                             {formatTime(scheduled.end_time)}
                           </div>
+
+                          {/* Skip for today — removes just this occurrence from today's schedule */}
+                          {!completed && onSkipTask && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-destructive"
+                              title="Skip for today only"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onSkipTask(scheduled.task_id, currentDate)
+                              }}
+                            >
+                              <CalendarX className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </div>
                     )
@@ -1030,6 +1178,7 @@ export function TodayView({
         onClose={handleCloseDetail}
         onEdit={onEditTask}
         onComplete={(taskId) => onCompleteTask(taskId, selectedTask?.is_habit ? currentDate : undefined)}
+        onUncomplete={(taskId) => onUncompleteTask?.(taskId, selectedTask?.is_habit ? currentDate : undefined)}
         isCompleted={selectedTaskId ? isTaskCompleted(selectedTaskId) : false}
       />
       </div>

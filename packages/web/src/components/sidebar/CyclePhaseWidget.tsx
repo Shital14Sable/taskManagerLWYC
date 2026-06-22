@@ -70,11 +70,16 @@ export function CyclePhaseWidget({ isCollapsed, onToggleCollapse }: CyclePhaseWi
 
   const handleOverrideChange = async (val: string) => {
     if (!preferences?.cycle) return;
+    const newOverride = val === 'auto' ? null : (val as CycleSeason);
+    const today = new Date().toISOString().split('T')[0];
     const updated = {
       ...preferences,
       cycle: {
         ...preferences.cycle,
-        phase_override: val === 'auto' ? null : (val as CycleSeason),
+        phase_override: newOverride,
+        // Anchor today as the start of the newly-selected phase so future
+        // dates recalculate correctly from this point.
+        phase_override_start: newOverride ? today : null,
       },
     };
     await savePreferences(updated);
@@ -115,7 +120,9 @@ export function CyclePhaseWidget({ isCollapsed, onToggleCollapse }: CyclePhaseWi
               </p>
               <p className="text-xs text-muted-foreground">
                 {phase.isOverride
-                  ? 'Manually set'
+                  ? preferences.cycle?.phase_override_start
+                    ? `Manually set · recalculating from ${new Date(preferences.cycle.phase_override_start + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                    : 'Manually set'
                   : `Day ${phase.cycleDay} · ${
                       phase.daysRemainingInPhase === 0
                         ? 'Last day of this phase'

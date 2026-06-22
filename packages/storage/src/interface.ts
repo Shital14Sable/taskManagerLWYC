@@ -133,6 +133,7 @@ export interface StorageAdapter {
   getHabitInstances(date: string): Promise<HabitInstance[]>;
   getHabitInstancesByHabit(habitId: string, startDate?: string, endDate?: string): Promise<HabitInstance[]>;
   saveHabitInstance(instance: HabitInstance): Promise<void>;
+  deleteHabitInstance(habitId: string, date: string): Promise<void>;
 
   // Journal Entries
   getJournalEntries(): Promise<JournalEntry[]>;

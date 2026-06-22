@@ -70,6 +70,13 @@ export type {
   MoodBlock,
   SidebarPreferences,
   WidgetId,
+  CycleSeason,
+  CyclePreferences,
+  OfficeHoursDay,
+  OfficeHoursPreferences,
+  FinancialFeeling,
+  FinancialEntry,
+  FinancialBucket,
   UserPreferences,
 } from './preferences';
 export {

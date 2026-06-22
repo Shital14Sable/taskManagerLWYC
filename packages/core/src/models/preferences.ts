@@ -75,6 +75,9 @@ export interface CyclePreferences {
   average_cycle_length: number;
   // null = auto-detect from history; set to a season to manually pin the current phase
   phase_override: CycleSeason | null;
+  // Date (YYYY-MM-DD) when the override was set. When set, today is treated as the START of
+  // phase_override, and all future dates are recalculated from that anchor point.
+  phase_override_start?: string | null;
   // Deprecated — kept for migration from v1.1.x data; prefer period_history
   last_period_start?: string | null;
 }
@@ -102,6 +105,33 @@ export interface UserPreferences {
   cycle?: CyclePreferences;
   office_hours?: OfficeHoursPreferences;
   additional_projects_hours?: OfficeHoursPreferences;
+  financial_buckets?: FinancialBucket[];
+  // "YYYY-MM" of the currently open financial month; used to detect month rollovers
+  financial_current_month?: string;
+}
+
+export type FinancialFeeling = 'happy' | 'neutral' | 'sad';
+
+export interface FinancialEntry {
+  id: string;
+  description: string;
+  // Positive amount for happy/neutral, negative for sad.
+  // Legacy entries without a feeling use the sign of amount directly.
+  amount: number;
+  feeling?: FinancialFeeling;
+  date: string;     // YYYY-MM-DD
+  created_at: string;
+}
+
+export interface FinancialBucket {
+  id: string;
+  name: string;
+  color: string;
+  entries: FinancialEntry[];
+  // Kept for backward-compat with v1.x data that had a plain amount
+  amount?: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export function createDefaultWorkHours(): Record<string, DayWorkHours> {

@@ -27,6 +27,7 @@ interface CompletedTasksViewProps {
   projects: Project[]
   allTasks: Task[]
   onComplete: (taskId: string, actualMinutes?: number) => Promise<void>
+  onUncomplete?: (taskId: string) => Promise<void>
   onEdit: (task: Task) => void
   onDelete: (taskId: string) => Promise<void>
   getSubtasks: (taskId: string) => Task[]
@@ -39,6 +40,7 @@ export function CompletedTasksView({
   projects,
   allTasks,
   onComplete,
+  onUncomplete,
   onEdit,
   onDelete,
   getSubtasks,
@@ -339,6 +341,7 @@ export function CompletedTasksView({
                         key={task.id}
                         task={task}
                         onComplete={onComplete}
+                        onUncomplete={onUncomplete}
                         onEdit={onEdit}
                         onDelete={onDelete}
                         subtasks={getSubtasks(task.id)}

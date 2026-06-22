@@ -3,7 +3,7 @@ import {
   ArrowLeft, Plus, Clock, Target, CheckCircle2, AlertCircle,
   Calendar, TrendingUp, Edit, Trash2, RefreshCw, ListTodo,
   Flame, Zap, Moon, MoreVertical, Play, Pause, Archive, Check,
-  FolderOpen, ChevronRight, Shuffle
+  FolderOpen, ChevronRight, Shuffle, ChevronDown, Link2, Lock
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -40,6 +40,7 @@ interface ProjectViewProps {
   projectId: string
   onBack: () => void
   onEditTask: (task: Task) => void
+  onAddSubtask?: (parentTask: Task) => void
   onEditProject?: (project: Project) => void
   onSelectProject?: (projectId: string) => void
 }
@@ -80,9 +81,9 @@ const energyIcons = {
   low: <Moon className="h-4 w-4 text-blue-400" />,
 }
 
-export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSelectProject }: ProjectViewProps) {
+export function ProjectView({ projectId, onBack, onEditTask, onAddSubtask, onEditProject, onSelectProject }: ProjectViewProps) {
   const { projects, tasks: allTasks, saveProject, saveTask, deleteTask, preferences, schedules } = useApp()
-  const { completeTask } = useTasks(projectId)
+  const { completeTask, uncompleteTask } = useTasks(projectId)
   const { getChildProjects, unpauseAllSubprojects } = useProjects()
   const [quickTaskTitle, setQuickTaskTitle] = useState('')
   const [quickTaskPriority, setQuickTaskPriority] = useState(3)
@@ -251,6 +252,14 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
     }
   }
 
+  const handleUncompleteTask = async (taskId: string) => {
+    try {
+      await uncompleteTask(taskId)
+    } catch (error) {
+      console.error('Failed to uncomplete task:', error)
+    }
+  }
+
   const handleDeleteTask = async (taskId: string) => {
     if (!confirm('Are you sure you want to delete this task?')) return
     try {
@@ -283,7 +292,14 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
   }
 
   const handleClearDistribution = async () => {
-    const incompleteTasks = tasks.filter(t => t.status !== 'completed' && !t.is_habit && !t.parent_task_id && t.scheduled_for)
+    // Never clear scheduled_for on fixed/hard-pinned tasks — that's their deliberately set time, not a cycle assignment.
+    const incompleteTasks = tasks.filter(t =>
+      t.status !== 'completed' &&
+      !t.is_habit &&
+      !t.parent_task_id &&
+      t.scheduled_for &&
+      !(t.is_pinned && t.pin_type === 'hard')
+    )
     if (incompleteTasks.length === 0) return
     setClearingDates(true)
     try {
@@ -301,7 +317,17 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
 
   const handleDistributeByCycle = async () => {
     if (!project?.deadline || !preferences) return
-    const incompleteTasks = tasks.filter(t => t.status !== 'completed' && !t.is_habit && !t.parent_task_id)
+    // Include subtasks — they are scheduled as independent tasks.
+    // Dependencies (declared on any task or subtask) are respected by the
+    // topological sort inside distributeCycleTasks.
+    // Exclude habits (covers recurring meetings, which use is_habit + recurrence.time_of_day)
+    // and any task with a fixed/hard-pinned time (one-off meetings, appointments) — these
+    // already have a deliberately chosen date+time and must not be reassigned.
+    const incompleteTasks = tasks.filter(t =>
+      t.status !== 'completed' &&
+      !t.is_habit &&
+      !(t.is_pinned && t.pin_type === 'hard')
+    )
     if (incompleteTasks.length === 0) return
 
     setDistributing(true)
@@ -755,10 +781,13 @@ export function ProjectView({ projectId, onBack, onEditTask, onEditProject, onSe
                       key={task.id}
                       task={task}
                       subtasks={tasks.filter(t => t.parent_task_id === task.id)}
+                      allTasks={tasks}
                       scheduledEntry={taskScheduleMap.get(task.id)}
                       onComplete={handleCompleteTask}
+                      onUncomplete={handleUncompleteTask}
                       onEdit={onEditTask}
                       onDelete={handleDeleteTask}
+                      onAddSubtask={onAddSubtask}
                     />
                   ))}
                 </div>
@@ -1128,112 +1157,222 @@ function formatScheduleLabel(entry: ScheduledEntry | undefined, scheduledFor: st
   return null
 }
 
+const rowEnergyIcons: Record<string, React.ReactNode> = {
+  high: <Flame className="h-3 w-3 text-orange-500" />,
+  medium: <Zap className="h-3 w-3 text-yellow-500" />,
+  low: <Moon className="h-3 w-3 text-blue-400" />,
+}
+
 function TaskRow({
   task,
   subtasks,
+  allTasks = [],
   scheduledEntry,
   onComplete,
+  onUncomplete,
   onEdit,
   onDelete,
+  onAddSubtask,
 }: {
   task: Task
   subtasks: Task[]
+  allTasks?: Task[]
   scheduledEntry?: ScheduledEntry
   onComplete: (id: string) => void
+  onUncomplete?: (id: string) => void
   onEdit: (task: Task) => void
   onDelete: (id: string) => void
+  onAddSubtask?: (parentTask: Task) => void
 }) {
+  // Auto-expand when there are fewer than 5 subtasks
+  const [expanded, setExpanded] = useState(() => subtasks.length > 0 && subtasks.length < 5)
   const isCompleted = task.status === 'completed'
   const scheduleLabel = isCompleted ? null : formatScheduleLabel(scheduledEntry, task.scheduled_for ?? null)
 
+  const completedSubtasks = subtasks.filter(s => s.status === 'completed').length
+  const hasSubtasks = subtasks.length > 0
+  const subtaskTotalMinutes = subtasks.reduce((sum, s) => sum + (s.estimated_minutes ?? 0), 0)
+  const totalMinutes = task.estimated_minutes + subtaskTotalMinutes
+
+  // Dependency info
+  const depTasks = (task.dependencies ?? [])
+    .map(id => allTasks.find(t => t.id === id))
+    .filter((t): t is Task => t !== undefined)
+  const blockedBy = depTasks.filter(t => t.status !== 'completed')
+  const isBlocked = blockedBy.length > 0
+
   return (
     <div className={cn(
-      "group flex items-center gap-3 p-3 rounded-lg border transition-all hover:bg-accent/50",
-      isCompleted && "opacity-60"
+      "rounded-lg border transition-all",
+      isCompleted && "opacity-60",
+      isBlocked && !isCompleted && "border-red-300/50 bg-red-50/20 dark:bg-red-950/10"
     )}>
-      <Checkbox
-        checked={isCompleted}
-        onCheckedChange={() => !isCompleted && onComplete(task.id)}
-      />
+      {/* Main task row */}
+      <div className="group flex items-center gap-3 p-3 hover:bg-accent/50">
+        <Checkbox
+          checked={isCompleted}
+          onCheckedChange={() => isCompleted ? onUncomplete?.(task.id) : onComplete(task.id)}
+        />
 
-      <div
-        className="w-2 h-2 rounded-full flex-shrink-0"
-        style={{ backgroundColor: priorityColors[task.priority] }}
-        title={`Priority: ${priorityLabels[task.priority]}`}
-      />
+        {/* Expand/collapse button for subtasks */}
+        {hasSubtasks ? (
+          <button
+            className="flex items-center gap-0.5 text-muted-foreground hover:text-foreground shrink-0"
+            onClick={() => setExpanded(e => !e)}
+            title={`${subtasks.length} subtask${subtasks.length !== 1 ? 's' : ''}`}
+          >
+            {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <span className="text-[10px] font-medium">{completedSubtasks}/{subtasks.length}</span>
+          </button>
+        ) : (
+          <div
+            className="w-2 h-2 rounded-full flex-shrink-0"
+            style={{ backgroundColor: priorityColors[task.priority] }}
+            title={`Priority: ${priorityLabels[task.priority]}`}
+          />
+        )}
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={cn(
-            "font-medium truncate",
-            isCompleted && "line-through text-muted-foreground"
-          )}>
-            {task.title}
-          </span>
-          {task.is_habit && (
-            <Badge variant="secondary" className="text-xs">Habit</Badge>
-          )}
-          {task.is_paused && (
-            <Badge variant="outline" className="text-xs text-yellow-600 border-yellow-500">
-              <Pause className="h-3 w-3 mr-1" />
-              Paused
-            </Badge>
-          )}
-          {subtasks.length > 0 && (
-            <Badge variant="outline" className="text-xs">
-              {subtasks.filter(s => s.status === 'completed').length}/{subtasks.length}
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-          <span className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            {task.estimated_minutes}m
-          </span>
-          <span className="flex items-center gap-0.5">
-            {energyIcons[task.energy_level]}
-          </span>
-          {scheduleLabel && (
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className={cn(
-              "flex items-center gap-1",
-              scheduledEntry ? "text-primary" : "text-muted-foreground italic"
+              "font-medium truncate",
+              isCompleted && "line-through text-muted-foreground"
             )}>
-              <Calendar className="h-3 w-3 shrink-0" />
-              {scheduleLabel}
+              {task.title}
             </span>
+            {task.is_habit && <Badge variant="secondary" className="text-xs">Habit</Badge>}
+            {task.is_paused && (
+              <Badge variant="outline" className="text-xs text-yellow-600 border-yellow-500">
+                <Pause className="h-3 w-3 mr-1" />Paused
+              </Badge>
+            )}
+            {isBlocked && !isCompleted && (
+              <Badge variant="outline" className="text-xs text-red-600 border-red-400">
+                <Lock className="h-3 w-3 mr-1" />Blocked
+              </Badge>
+            )}
+            {depTasks.length > 0 && !isBlocked && (
+              <Badge variant="outline" className="text-xs text-muted-foreground">
+                <Link2 className="h-3 w-3 mr-1" />{depTasks.length} dep
+              </Badge>
+            )}
+          </div>
+
+          {/* Blocked-by details */}
+          {blockedBy.length > 0 && !isCompleted && (
+            <p className="text-xs text-red-600 mt-0.5 flex items-center gap-1">
+              <Lock className="h-3 w-3 shrink-0" />
+              Blocked by: {blockedBy.map(t => t.title).join(', ')}
+            </p>
           )}
-          {task.status === 'blocked' && (
-            <Badge variant="destructive" className="text-xs">Blocked</Badge>
-          )}
-          {task.status === 'in_progress' && (
-            <Badge variant="default" className="text-xs">In Progress</Badge>
-          )}
-          {task.deadline && (
-            <span className="text-orange-500">
-              Due: {new Date(task.deadline).toLocaleDateString()}
+
+          <div className="flex items-center flex-wrap gap-3 text-xs text-muted-foreground mt-0.5">
+            <span className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {hasSubtasks ? (
+                <>{totalMinutes}m <span className="text-muted-foreground/60">(+{subtaskTotalMinutes}m subtasks)</span></>
+              ) : (
+                <>{task.estimated_minutes}m</>
+              )}
             </span>
+            <span className="flex items-center gap-0.5">
+              {rowEnergyIcons[task.energy_level]}
+            </span>
+            {hasSubtasks && (
+              <Progress
+                value={(completedSubtasks / subtasks.length) * 100}
+                className="h-1 w-16"
+              />
+            )}
+            {scheduleLabel && (
+              <span className={cn(
+                "flex items-center gap-1",
+                scheduledEntry ? "text-primary" : "text-muted-foreground italic"
+              )}>
+                <Calendar className="h-3 w-3 shrink-0" />{scheduleLabel}
+              </span>
+            )}
+            {task.status === 'in_progress' && (
+              <Badge variant="default" className="text-xs">In Progress</Badge>
+            )}
+            {task.deadline && (
+              <span className="text-orange-500">
+                Due: {new Date(task.deadline).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {onAddSubtask && !task.is_habit && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground"
+              onClick={() => onAddSubtask(task)}
+              title="Add subtask"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
           )}
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(task)}>
+            <Edit className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost" size="icon"
+            className="h-7 w-7 text-destructive hover:text-destructive"
+            onClick={() => onDelete(task.id)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
 
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => onEdit(task)}
-        >
-          <Edit className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-destructive hover:text-destructive"
-          onClick={() => onDelete(task.id)}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+      {/* Subtask list */}
+      {hasSubtasks && expanded && (
+        <div className="ml-10 mr-3 pb-3 pl-3 border-l-2 border-muted space-y-1">
+          {subtasks.map(sub => (
+            <div
+              key={sub.id}
+              className={cn(
+                "group/sub flex items-center gap-2 text-sm p-1.5 rounded hover:bg-accent/50",
+                sub.status === 'completed' && "opacity-60"
+              )}
+            >
+              <Checkbox
+                checked={sub.status === 'completed'}
+                onCheckedChange={() => sub.status !== 'completed' && onComplete(sub.id)}
+                className="h-3.5 w-3.5 shrink-0"
+              />
+              <span className={cn("flex-1 truncate", sub.status === 'completed' && "line-through text-muted-foreground")}>
+                {sub.title}
+              </span>
+              <span className="flex items-center gap-1 text-muted-foreground text-xs">
+                {rowEnergyIcons[sub.energy_level]}
+                {sub.estimated_minutes}m
+              </span>
+              <div
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{ backgroundColor: priorityColors[sub.priority] }}
+                title={priorityLabels[sub.priority]}
+              />
+              <div className="flex gap-0.5 opacity-0 group-hover/sub:opacity-100 transition-opacity">
+                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onEdit(sub)}>
+                  <Edit className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          ))}
+          {onAddSubtask && !task.is_habit && (
+            <button
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors pl-1 py-1"
+              onClick={() => onAddSubtask(task)}
+            >
+              <Plus className="h-3 w-3" />Add subtask
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

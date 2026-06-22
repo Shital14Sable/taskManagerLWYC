@@ -50,6 +50,59 @@ interface PinnedTaskCandidate {
   duration: number;
 }
 
+/** Unified shape for any fixed-time item (habit-with-time or hard-pinned task) used for conflict detection. */
+interface FixedTimeCandidate {
+  id: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  startMinutes: number;
+  endMinutes: number;
+  duration: number;
+  priority: number;
+  isHabit: boolean;
+  autoScheduled: boolean;
+}
+
+/**
+ * Group overlapping fixed-time candidates using a sweep-line interval merge.
+ * Items that transitively overlap (A-B and B-C even if A-C don't directly touch)
+ * land in the same group. Singletons (no overlap) get no group id.
+ * Within a group, items are ranked by priority descending (rank 0 = highest priority),
+ * tie-broken by earlier start time.
+ */
+function groupOverlappingFixedTime(
+  candidates: FixedTimeCandidate[]
+): Map<string, { group: string; rank: number }> {
+  const sorted = [...candidates].sort((a, b) => a.startMinutes - b.startMinutes);
+  const result = new Map<string, { group: string; rank: number }>();
+
+  let groupIdx = 0;
+  let i = 0;
+  while (i < sorted.length) {
+    const cluster = [sorted[i]];
+    let clusterEnd = sorted[i].endMinutes;
+    let j = i + 1;
+    while (j < sorted.length && sorted[j].startMinutes < clusterEnd) {
+      cluster.push(sorted[j]);
+      clusterEnd = Math.max(clusterEnd, sorted[j].endMinutes);
+      j++;
+    }
+
+    if (cluster.length > 1) {
+      const groupId = `conflict-${groupIdx++}`;
+      const ranked = [...cluster].sort((a, b) =>
+        b.priority - a.priority || a.startMinutes - b.startMinutes
+      );
+      ranked.forEach((c, rank) => result.set(c.id, { group: groupId, rank }));
+    }
+
+    i = j;
+  }
+
+  return result;
+}
+
 interface TaskScore {
   task: Task;
   score: number;
@@ -82,19 +135,27 @@ export class Scheduler {
     }
     console.log('[Scheduler] REGENERATING schedule for', targetDate, '(force:', force, ')');
 
+    // Tasks/habits skipped for THIS day only (via "Skip for today" in the UI).
+    // Carried over from the existing schedule so they stay excluded across
+    // regenerations of this date, while remaining eligible on every other day.
+    const skippedTaskIds = existingSchedule?.skipped_task_ids ?? [];
+    const skippedSet = new Set(skippedTaskIds);
+
     // Filter tasks
     const habits = tasks.filter(t =>
       t.is_habit &&
-      !this.isHabitPaused(t, targetDateObj)
+      !this.isHabitPaused(t, targetDateObj) &&
+      !skippedSet.has(t.id)
     );
-    console.log('[Scheduler] Habits (not paused):', habits.length, habits.map(h => h.title));
+    console.log('[Scheduler] Habits (not paused, not skipped today):', habits.length, habits.map(h => h.title));
 
     const regularTasks = tasks.filter(t =>
       !t.is_habit &&
       !this.isTaskPaused(t, targetDateObj) &&
-      (t.status === 'todo' || t.status === 'in_progress')
+      (t.status === 'todo' || t.status === 'in_progress') &&
+      !skippedSet.has(t.id)
     );
-    console.log('[Scheduler] Regular tasks:', regularTasks.length);
+    console.log('[Scheduler] Regular tasks (not skipped today):', regularTasks.length);
 
     // DEBUG: Log ALL regular tasks with their pinned properties
     console.log('[Scheduler] All regular tasks with pinned info:',
@@ -125,7 +186,8 @@ export class Scheduler {
       regularTasks,
       allTasksMap,
       previouslyScheduledIds,
-      existingSchedule?.completed_tasks ?? []
+      existingSchedule?.completed_tasks ?? [],
+      skippedTaskIds
     );
   }
 
@@ -138,7 +200,8 @@ export class Scheduler {
     regularTasks: Task[],
     allTasksMap: Map<string, Task>,
     previouslyScheduledIds: Set<string>,
-    preserveCompletedTasks: string[]
+    preserveCompletedTasks: string[],
+    preserveSkippedTaskIds: string[] = []
   ): Schedule {
     const targetDateStr = toISODateString(targetDate);
 
@@ -231,73 +294,70 @@ export class Scheduler {
       }
     }
 
-    // Sort by start time, then by priority
-    habitCandidates.sort((a, b) => {
-      if (a.startMinutes !== b.startMinutes) {
-        return a.startMinutes - b.startMinutes;
-      }
-      return a.habit.priority - b.habit.priority;
-    });
+    // Combine habits-with-time and hard-pinned tasks into one unified candidate list.
+    // Conflicts are NEVER silently dropped — overlapping items are all kept and tagged
+    // with conflict_group/conflict_rank so the UI can render them side by side.
+    const fixedCandidates: FixedTimeCandidate[] = [
+      ...habitCandidates.map(hc => ({
+        id: hc.habit.id,
+        title: hc.habit.title,
+        startTime: hc.startTime,
+        endTime: hc.endTime,
+        startMinutes: hc.startMinutes,
+        endMinutes: hc.endMinutes,
+        duration: hc.duration,
+        priority: hc.habit.priority,
+        isHabit: true,
+        autoScheduled: true,
+      })),
+      ...pinnedCandidates.map(pc => ({
+        id: pc.task.id,
+        title: pc.task.title,
+        startTime: pc.startTime,
+        endTime: pc.endTime,
+        startMinutes: pc.startMinutes,
+        endMinutes: pc.endMinutes,
+        duration: pc.duration,
+        priority: pc.task.priority,
+        isHabit: false,
+        autoScheduled: false,
+      })),
+    ];
 
-    // Detect and resolve overlaps
-    const scheduledHabitRanges: Array<[number, number, string]> = [];
+    const conflictInfo = groupOverlappingFixedTime(fixedCandidates);
 
-    for (const hc of habitCandidates) {
-      let hasOverlap = false;
-
-      for (const [scheduledStart, scheduledEnd] of scheduledHabitRanges) {
-        if (hc.startMinutes < scheduledEnd && hc.endMinutes > scheduledStart) {
-          hasOverlap = true;
-          break;
-        }
-      }
-
-      if (hasOverlap) {
-        continue; // Skip overlapping habit
-      }
-
-      blockedSlots.push([hc.startTime, hc.endTime]);
+    for (const fc of fixedCandidates) {
+      blockedSlots.push([fc.startTime, fc.endTime]);
+      const info = conflictInfo.get(fc.id);
       fixedScheduledTasks.push({
-        task_id: hc.habit.id,
-        start_time: hc.startTime,
-        end_time: hc.endTime,
-        estimated_minutes: hc.duration,
+        task_id: fc.id,
+        start_time: fc.startTime,
+        end_time: fc.endTime,
+        estimated_minutes: fc.duration,
         is_buffer: false,
-        auto_scheduled: true,
+        auto_scheduled: fc.autoScheduled,
+        ...(info ? { conflict_group: info.group, conflict_rank: info.rank } : {}),
       });
-      scheduledHabitRanges.push([hc.startMinutes, hc.endMinutes, hc.habit.title]);
     }
 
-    // Sort hard-pinned tasks by start time
-    pinnedCandidates.sort((a, b) => a.startMinutes - b.startMinutes);
-
-    // Add hard-pinned tasks to blocked slots (they take priority, similar to habits)
-    for (const pc of pinnedCandidates) {
-      // Check for overlap with already scheduled ranges
-      let hasOverlap = false;
-      for (const [scheduledStart, scheduledEnd] of scheduledHabitRanges) {
-        if (pc.startMinutes < scheduledEnd && pc.endMinutes > scheduledStart) {
-          hasOverlap = true;
-          console.log('[Scheduler] Hard-pinned task', pc.task.title, 'overlaps with existing slot');
-          break;
-        }
+    if (conflictInfo.size > 0) {
+      const titlesByGroup = new Map<string, string[]>();
+      for (const fc of fixedCandidates) {
+        const info = conflictInfo.get(fc.id);
+        if (!info) continue;
+        const list = titlesByGroup.get(info.group) ?? [];
+        list.push(fc.title);
+        titlesByGroup.set(info.group, list);
       }
-
-      if (!hasOverlap) {
-        blockedSlots.push([pc.startTime, pc.endTime]);
-        fixedScheduledTasks.push({
-          task_id: pc.task.id,
-          start_time: pc.startTime,
-          end_time: pc.endTime,
-          estimated_minutes: pc.duration,
-          is_buffer: false,
-          auto_scheduled: false, // Not auto-scheduled, user pinned it
-        });
-        scheduledHabitRanges.push([pc.startMinutes, pc.endMinutes, pc.task.title]);
+      for (const [group, titles] of titlesByGroup) {
+        console.log('[Scheduler] Time conflict', group, '-', titles.join(' vs '));
       }
     }
 
     // Get available slots after blocking habits and hard-pinned tasks
+    // (blockedSlots may contain overlapping ranges from conflicting items — getAvailableSlots
+    // must treat their union as blocked, which mergeMinuteRanges-equivalent handling inside
+    // getAvailableSlots already does via interval subtraction)
     let availableSlots = getAvailableSlots(
       workStart,
       workEnd,
@@ -403,6 +463,7 @@ export class Scheduler {
       },
       scheduled_tasks: allScheduled,
       completed_tasks: preserveCompletedTasks,
+      skipped_task_ids: preserveSkippedTaskIds,
       summary: {
         total_scheduled_minutes: totalMinutes,
         total_completed_minutes: 0,
@@ -675,16 +736,57 @@ export class Scheduler {
     }
 
     const dayName = getDayName(targetDate);
+    const isBiweekly = habit.recurrence.frequency === 'biweekly';
 
-    if (habit.recurrence.frequency === 'daily') {
-      return true;
-    } else if (habit.recurrence.frequency === 'weekly') {
-      return habit.recurrence.days_of_week
+    // If specific days are set, always respect them — regardless of the frequency label.
+    // This handles the common case where a user selects days but the frequency field
+    // was left as 'daily' (the form default).
+    if (habit.recurrence.days_of_week && habit.recurrence.days_of_week.length > 0) {
+      const dayMatches = habit.recurrence.days_of_week
         .map(d => d.toLowerCase())
         .includes(dayName);
+      if (!dayMatches) return false;
+      return isBiweekly ? this.isBiweeklyOnWeek(habit, targetDate) : true;
+    }
+
+    // No specific days set: fall back to frequency
+    if (habit.recurrence.frequency === 'daily') {
+      return true;
+    }
+
+    // Weekly/biweekly with no explicit days selected: default to the day-of-week
+    // of the recurrence anchor (start_date, or the task's creation date) instead
+    // of never occurring. This covers habits/meetings created without picking a day.
+    if (habit.recurrence.frequency === 'weekly' || isBiweekly) {
+      const anchorStr = habit.recurrence.start_date ?? habit.created_at?.split('T')[0];
+      if (anchorStr) {
+        const anchor = parseISODate(anchorStr);
+        if (getDayName(anchor) !== dayName) return false;
+        return isBiweekly ? this.isBiweeklyOnWeek(habit, targetDate) : true;
+      }
     }
 
     return false;
+  }
+
+  /**
+   * For 'biweekly' recurrence, determine whether targetDate falls in an "on" week,
+   * counting in 14-day blocks from the recurrence's anchor date (recurrence.start_date,
+   * falling back to the task's created_at date).
+   */
+  private isBiweeklyOnWeek(habit: Task, targetDate: Date): boolean {
+    const anchorStr = habit.recurrence.start_date ?? habit.created_at?.split('T')[0];
+    if (!anchorStr) return true; // no anchor available — don't filter out
+
+    const anchor = parseISODate(anchorStr);
+    const anchorMidnight = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
+    const targetMidnight = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
+
+    const daysDiff = Math.floor((targetMidnight.getTime() - anchorMidnight.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysDiff < 0) return false;
+
+    const weekIndex = Math.floor(daysDiff / 7);
+    return weekIndex % 2 === 0;
   }
 
   /**

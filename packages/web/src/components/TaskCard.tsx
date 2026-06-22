@@ -1,17 +1,20 @@
 import { useState } from 'react'
-import { Clock, Flame, Zap, Moon, Trash2, Edit, ChevronDown, ChevronRight, AlertCircle, Link2, Lock, PauseCircle, CalendarClock } from 'lucide-react'
+import { Clock, Flame, Zap, Moon, Trash2, Edit, ChevronDown, ChevronRight, AlertCircle, Link2, Lock, PauseCircle, CalendarClock, Plus } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Progress } from '@/components/ui/progress'
 import type { Task } from '@/types'
 import { cn } from '@/lib/utils'
 
 interface TaskCardProps {
   task: Task
   onComplete: (id: string) => void
+  onUncomplete?: (id: string) => void
   onEdit: (task: Task) => void
   onDelete: (id: string) => void
+  onAddSubtask?: (parentTask: Task) => void
   subtasks?: Task[]
   allTasks?: Task[]  // For resolving dependency names
   scheduledDate?: string | null  // When this task is scheduled
@@ -47,8 +50,18 @@ const getTagDisplayName = (tag: string): string => {
   return parts[parts.length - 1]
 }
 
-export function TaskCard({ task, onComplete, onEdit, onDelete, subtasks = [], allTasks = [], scheduledDate }: TaskCardProps) {
-  const [expanded, setExpanded] = useState(false)
+const subtaskEnergyIcons = {
+  high: <Flame className="h-3 w-3 text-orange-500" />,
+  medium: <Zap className="h-3 w-3 text-yellow-500" />,
+  low: <Moon className="h-3 w-3 text-blue-400" />,
+}
+
+export function TaskCard({ task, onComplete, onUncomplete, onEdit, onDelete, onAddSubtask, subtasks = [], allTasks = [], scheduledDate }: TaskCardProps) {
+  // Auto-expand when there are fewer than 5 subtasks
+  const [expanded, setExpanded] = useState(() => subtasks.length > 0 && subtasks.length < 5)
+
+  const subtaskTotalMinutes = subtasks.reduce((sum, s) => sum + (s.estimated_minutes ?? 0), 0)
+  const totalMinutes = task.estimated_minutes + subtaskTotalMinutes
   const isCompleted = task.status === 'completed'
 
   // Filter out project tags for cleaner display (project is usually shown elsewhere)
@@ -87,7 +100,7 @@ export function TaskCard({ task, onComplete, onEdit, onDelete, subtasks = [], al
         <div className="flex items-start gap-3">
           <Checkbox
             checked={isCompleted}
-            onCheckedChange={() => !isCompleted && onComplete(task.id)}
+            onCheckedChange={() => isCompleted ? onUncomplete?.(task.id) : onComplete(task.id)}
             className="mt-1"
           />
 
@@ -96,13 +109,17 @@ export function TaskCard({ task, onComplete, onEdit, onDelete, subtasks = [], al
               {subtasks.length > 0 && (
                 <button
                   onClick={() => setExpanded(!expanded)}
-                  className="p-0.5 hover:bg-accent rounded"
+                  className="flex items-center gap-1 p-0.5 hover:bg-accent rounded text-muted-foreground"
+                  title={`${subtasks.length} subtask${subtasks.length !== 1 ? 's' : ''}`}
                 >
                   {expanded ? (
                     <ChevronDown className="h-4 w-4" />
                   ) : (
                     <ChevronRight className="h-4 w-4" />
                   )}
+                  <span className="text-[10px] font-medium">
+                    {subtasks.filter(s => s.status === 'completed').length}/{subtasks.length}
+                  </span>
                 </button>
               )}
 
@@ -211,7 +228,11 @@ export function TaskCard({ task, onComplete, onEdit, onDelete, subtasks = [], al
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Clock className="h-3 w-3" />
-                {task.estimated_minutes}m
+                {subtasks.length > 0 ? (
+                  <>{totalMinutes}m <span className="text-muted-foreground/60">(+{subtaskTotalMinutes}m subtasks)</span></>
+                ) : (
+                  <>{task.estimated_minutes}m</>
+                )}
               </span>
 
               <span className="flex items-center gap-1">
@@ -233,6 +254,17 @@ export function TaskCard({ task, onComplete, onEdit, onDelete, subtasks = [], al
           </div>
 
           <div className="flex items-center gap-1">
+            {onAddSubtask && !task.is_habit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                onClick={() => onAddSubtask(task)}
+                title="Add subtask"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -252,25 +284,69 @@ export function TaskCard({ task, onComplete, onEdit, onDelete, subtasks = [], al
           </div>
         </div>
 
-        {expanded && subtasks.length > 0 && (
-          <div className="mt-3 ml-8 pl-3 border-l-2 border-muted space-y-2">
-            {subtasks.map((subtask) => (
-              <div
-                key={subtask.id}
-                className="flex items-center gap-2 text-sm"
-              >
-                <Checkbox
-                  checked={subtask.status === 'completed'}
-                  onCheckedChange={() => subtask.status !== 'completed' && onComplete(subtask.id)}
-                  className="h-3 w-3"
-                />
-                <span className={cn(
-                  subtask.status === 'completed' && "line-through text-muted-foreground"
-                )}>
-                  {subtask.title}
-                </span>
+        {subtasks.length > 0 && (
+          <div className="mt-2 ml-8">
+            {/* Subtask progress bar */}
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs text-muted-foreground">
+                {subtasks.filter(s => s.status === 'completed').length}/{subtasks.length} subtasks
+              </span>
+              <Progress
+                value={(subtasks.filter(s => s.status === 'completed').length / subtasks.length) * 100}
+                className="h-1 flex-1"
+              />
+            </div>
+
+            {/* Expanded subtask list */}
+            {expanded && (
+              <div className="pl-3 border-l-2 border-muted space-y-1.5 mt-2">
+                {subtasks.map((subtask) => (
+                  <div
+                    key={subtask.id}
+                    className={cn(
+                      "flex items-center gap-2 text-sm p-1.5 rounded-md hover:bg-accent/50 group",
+                      subtask.status === 'completed' && "opacity-60"
+                    )}
+                  >
+                    <Checkbox
+                      checked={subtask.status === 'completed'}
+                      onCheckedChange={() => subtask.status === 'completed' ? onUncomplete?.(subtask.id) : onComplete(subtask.id)}
+                      className="h-3.5 w-3.5 shrink-0"
+                    />
+                    <span className={cn(
+                      "flex-1 truncate",
+                      subtask.status === 'completed' && "line-through text-muted-foreground"
+                    )}>
+                      {subtask.title}
+                    </span>
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      {subtaskEnergyIcons[subtask.energy_level]}
+                      <span className="text-[10px]">{subtask.estimated_minutes}m</span>
+                    </span>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={() => onEdit(subtask)}
+                        title="Edit subtask"
+                      >
+                        <Edit className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {onAddSubtask && !task.is_habit && (
+                  <button
+                    className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors pl-1 py-1"
+                    onClick={() => onAddSubtask(task)}
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add subtask
+                  </button>
+                )}
               </div>
-            ))}
+            )}
           </div>
         )}
       </CardContent>

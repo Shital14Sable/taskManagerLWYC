@@ -20,7 +20,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { GitBranch, X, PauseCircle, Clock } from 'lucide-react'
+import { GitBranch, X, PauseCircle, Clock, Users } from 'lucide-react'
 import type { Task, Project, CreateTaskInput, Recurrence } from '@/types'
 
 interface TaskFormProps {
@@ -42,6 +42,12 @@ const DAYS_OF_WEEK = [
   'Saturday',
   'Sunday',
 ]
+
+// getDay(): 0=Sunday..6=Saturday → map into DAYS_OF_WEEK's Monday-first order
+function todaysDayName(): string {
+  const idx = new Date().getDay()
+  return DAYS_OF_WEEK[(idx + 6) % 7]
+}
 
 export function TaskForm({
   open,
@@ -98,6 +104,9 @@ export function TaskForm({
   const [isFixedTime, setIsFixedTime] = useState(false)
   const [scheduledDate, setScheduledDate] = useState('')
   const [scheduledTime, setScheduledTime] = useState('')
+  // Recurring meeting — same underlying mechanism as a habit (is_habit + recurrence),
+  // but framed for calendar-style repeating meetings: requires a time and defaults to weekly.
+  const [isRecurringMeeting, setIsRecurringMeeting] = useState(false)
 
   useEffect(() => {
     if (task) {
@@ -157,9 +166,15 @@ export function TaskForm({
         setScheduledDate('')
         setScheduledTime('')
       }
+      // A habit with a specific time and at least one selected day reads as a "recurring meeting"
+      setIsRecurringMeeting(
+        !!(task.is_habit && task.recurrence?.time_of_day && (task.recurrence?.days_of_week?.length ?? 0) > 0)
+      )
     } else {
+      // When adding a subtask, inherit the parent task's project
+      const parentTask = parentTaskId ? allTasks.find(t => t.id === parentTaskId) : null
       setFormData({
-        project_id: projects[0]?.id || '',
+        project_id: parentTask?.project_id || projects[0]?.id || '',
         title: '',
         description: '',
         priority: 3,
@@ -181,6 +196,7 @@ export function TaskForm({
       setIsFixedTime(false)
       setScheduledDate('')
       setScheduledTime('')
+      setIsRecurringMeeting(false)
     }
     setDependencySearch('') // Clear search when dialog opens/closes
   }, [task, parentTaskId, projects, open])
@@ -248,12 +264,20 @@ export function TaskForm({
   }
 
   const toggleDay = (day: string) => {
-    setRecurrence((prev) => ({
-      ...prev,
-      days_of_week: prev.days_of_week?.includes(day)
+    setRecurrence((prev) => {
+      const newDays = prev.days_of_week?.includes(day)
         ? prev.days_of_week.filter((d) => d !== day)
-        : [...(prev.days_of_week || []), day],
-    }))
+        : [...(prev.days_of_week || []), day]
+
+      // Preserve an explicitly-chosen biweekly/monthly cadence; otherwise auto-switch:
+      // selecting any specific day → weekly; deselecting all → daily.
+      const keepFrequency = prev.frequency === 'biweekly' || prev.frequency === 'monthly'
+      const newFrequency = keepFrequency
+        ? prev.frequency
+        : (newDays.length > 0 ? 'weekly' : 'daily')
+
+      return { ...prev, days_of_week: newDays, frequency: newFrequency }
+    })
   }
 
   return (
@@ -583,9 +607,10 @@ export function TaskForm({
           <div className="flex items-center space-x-2">
             <Checkbox
               id="is_habit"
-              checked={formData.is_habit}
+              checked={formData.is_habit && !isRecurringMeeting}
               onCheckedChange={(checked) => {
                 setFormData({ ...formData, is_habit: checked as boolean })
+                setIsRecurringMeeting(false)
                 // Set default time if enabling habit and no time is set
                 if (checked && !recurrence.time_of_day) {
                   setRecurrence({ ...recurrence, time_of_day: '09:00' })
@@ -595,14 +620,62 @@ export function TaskForm({
             <Label htmlFor="is_habit">This is a recurring habit</Label>
           </div>
 
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="is_recurring_meeting"
+              checked={isRecurringMeeting}
+              onCheckedChange={(checked) => {
+                const enabled = checked as boolean
+                setIsRecurringMeeting(enabled)
+                if (enabled) {
+                  setFormData({ ...formData, is_habit: true })
+                  setRecurrence({
+                    ...recurrence,
+                    frequency: recurrence.frequency === 'daily' || !recurrence.frequency ? 'weekly' : recurrence.frequency,
+                    time_of_day: recurrence.time_of_day || '09:00',
+                    // Default to today's day-of-week so the meeting has a defined
+                    // occurrence even if the user doesn't pick a day explicitly.
+                    days_of_week: recurrence.days_of_week && recurrence.days_of_week.length > 0
+                      ? recurrence.days_of_week
+                      : [todaysDayName()],
+                    start_date: recurrence.start_date ?? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`,
+                  })
+                } else {
+                  setFormData({ ...formData, is_habit: false })
+                }
+              }}
+            />
+            <Label htmlFor="is_recurring_meeting" className="flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              This is a recurring meeting
+            </Label>
+          </div>
+
           {formData.is_habit && (
             <div className="space-y-4 rounded-lg border bg-muted/50 p-4">
+              {isRecurringMeeting && (
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Recurring meetings repeat at a fixed time on the days you choose below.
+                </p>
+              )}
               <div className="space-y-2">
                 <Label>Frequency</Label>
                 <Select
                   value={recurrence.frequency || 'daily'}
-                  onValueChange={(value: 'daily' | 'weekly' | 'monthly') =>
-                    setRecurrence({ ...recurrence, frequency: value })
+                  onValueChange={(value: 'daily' | 'weekly' | 'biweekly' | 'monthly') =>
+                    setRecurrence({
+                      ...recurrence,
+                      frequency: value,
+                      // Weekly/biweekly need at least one day — default to today's
+                      // day-of-week if none is selected yet, so the recurrence is
+                      // never silently empty (which would mean "never occurs").
+                      days_of_week: (value === 'weekly' || value === 'biweekly') && (!recurrence.days_of_week || recurrence.days_of_week.length === 0)
+                        ? [todaysDayName()]
+                        : recurrence.days_of_week,
+                      start_date: value === 'biweekly' && !recurrence.start_date
+                        ? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`
+                        : recurrence.start_date,
+                    })
                   }
                 >
                   <SelectTrigger>
@@ -611,34 +684,58 @@ export function TaskForm({
                   <SelectContent>
                     <SelectItem value="daily">Daily</SelectItem>
                     <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="biweekly">Biweekly</SelectItem>
                     <SelectItem value="monthly">Monthly</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label>Days of Week</Label>
-                <div className="flex flex-wrap gap-2">
-                  {DAYS_OF_WEEK.map((day) => (
-                    <Button
-                      key={day}
-                      type="button"
-                      variant={
-                        recurrence.days_of_week?.includes(day)
-                          ? 'default'
-                          : 'outline'
-                      }
-                      size="sm"
-                      onClick={() => toggleDay(day)}
-                    >
-                      {day.slice(0, 3)}
-                    </Button>
-                  ))}
+              {/* Day picker: shown for weekly/biweekly, when days are already selected, or for any recurring meeting */}
+              {(recurrence.frequency === 'weekly' || recurrence.frequency === 'biweekly' || isRecurringMeeting
+                || (recurrence.days_of_week && recurrence.days_of_week.length > 0)) && (
+                <div className="space-y-2">
+                  <Label>Days of Week</Label>
+                  <p className="text-xs text-muted-foreground">
+                    {recurrence.frequency === 'biweekly'
+                      ? 'Select the days this repeats every other week.'
+                      : 'Select the days this habit repeats. Leaving all off means every day.'}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {DAYS_OF_WEEK.map((day) => (
+                      <Button
+                        key={day}
+                        type="button"
+                        variant={
+                          recurrence.days_of_week?.includes(day)
+                            ? 'default'
+                            : 'outline'
+                        }
+                        size="sm"
+                        onClick={() => toggleDay(day)}
+                      >
+                        {day.slice(0, 3)}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {recurrence.frequency === 'biweekly' && (
+                <div className="space-y-2">
+                  <Label htmlFor="recurrence_start_date" className="text-xs">First occurrence (anchors the every-other-week pattern)</Label>
+                  <Input
+                    id="recurrence_start_date"
+                    type="date"
+                    value={recurrence.start_date || ''}
+                    onChange={(e) => setRecurrence({ ...recurrence, start_date: e.target.value })}
+                  />
+                </div>
+              )}
 
               <div className="space-y-2">
-                <Label htmlFor="time_of_day">Time of Day</Label>
+                <Label htmlFor="time_of_day">
+                  Time of Day{isRecurringMeeting && <span className="text-destructive"> *</span>}
+                </Label>
                 <Input
                   id="time_of_day"
                   type="time"

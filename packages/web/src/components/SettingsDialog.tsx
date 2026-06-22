@@ -1209,6 +1209,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                   period_history: string[]
                   average_cycle_length: number
                   phase_override: CycleSeason | null
+                  phase_override_start: string | null
                 }>) =>
                   setPreferences({
                     ...preferences,
@@ -1387,9 +1388,15 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                               <Label className="text-sm">Current phase</Label>
                               <Select
                                 value={preferences.cycle?.phase_override ?? 'auto'}
-                                onValueChange={(val) =>
-                                  updateCycle({ phase_override: val === 'auto' ? null : val as CycleSeason })
-                                }
+                                onValueChange={(val) => {
+                                  const newOverride = val === 'auto' ? null : val as CycleSeason
+                                  updateCycle({
+                                    phase_override: newOverride,
+                                    // Record today as the anchor date when setting a new override;
+                                    // clear it when reverting to auto-detect.
+                                    phase_override_start: newOverride ? today : null,
+                                  })
+                                }}
                               >
                                 <SelectTrigger className="w-56 h-8 text-sm">
                                   <SelectValue />

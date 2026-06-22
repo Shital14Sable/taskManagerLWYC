@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Plus, FolderPlus, RefreshCw, GitBranch, CalendarDays, Calendar, BarChart3, ListTodo, Target, ChevronRight, FolderOpen, Repeat, Flame, Inbox, ChevronDown, Edit, ListChecks, FileText, ClipboardCheck, TrendingUp, PauseCircle, CheckCircle2, AlertCircle, LogIn, X, BookOpen, Smile, LayoutGrid, Network } from 'lucide-react'
+import { Plus, FolderPlus, RefreshCw, GitBranch, CalendarDays, Calendar, BarChart3, ListTodo, Target, ChevronRight, FolderOpen, Repeat, Flame, Inbox, ChevronDown, Edit, ListChecks, FileText, ClipboardCheck, TrendingUp, PauseCircle, CheckCircle2, AlertCircle, LogIn, X, BookOpen, Smile, LayoutGrid, Network, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -36,6 +36,7 @@ import { ListView } from '@/pages/ListView'
 import { NotesView } from '@/pages/NotesView'
 import { GoalsView } from '@/pages/GoalsView'
 import { ReviewsView } from '@/pages/ReviewsView'
+import { FinancialView } from '@/pages/FinancialView'
 import { JournalView } from '@/pages/JournalView'
 import { MoodInsights } from '@/pages/MoodInsights'
 import { UserStats } from '@/components/UserStats'
@@ -58,13 +59,13 @@ import { useApp } from '@/context/AppContext'
 import type { Task, Project, CreateTaskInput, CreateProjectInput } from '@/types'
 import { cn } from '@/lib/utils'
 
-type ViewType = 'today' | 'tasks' | 'week' | 'month' | 'analytics' | 'badges' | 'mood' | 'project' | 'projects' | 'habits' | 'habit' | 'inbox' | 'lists' | 'list' | 'notes' | 'goals' | 'reviews' | 'paused' | 'journal'
+type ViewType = 'today' | 'tasks' | 'week' | 'month' | 'analytics' | 'badges' | 'mood' | 'project' | 'projects' | 'habits' | 'habit' | 'inbox' | 'lists' | 'list' | 'notes' | 'goals' | 'reviews' | 'paused' | 'journal' | 'financial'
 
 export function Dashboard() {
   const [selectedScheduleDate, setSelectedScheduleDate] = useState<string | undefined>(undefined)
-  const { tasks, habits, regularTasks, inboxTasks, loading: tasksLoading, createTask, updateTask, deleteTask, completeTask, refetch: refetchTasks, lastXPGain, clearXPGain } = useTasks()
+  const { tasks, habits, regularTasks, inboxTasks, loading: tasksLoading, createTask, updateTask, deleteTask, completeTask, uncompleteTask, refetch: refetchTasks, lastXPGain, clearXPGain } = useTasks()
   const { projects, activeProjects, pausedProjects, topLevelProjects, loading: projectsLoading, createProject, updateProject, deleteProject, isParentPaused, isEffectivelyPaused, getChildProjects, unpauseAllSubprojects, refetch: refetchProjects } = useProjects()
-  const { schedule, loading: scheduleLoading, reschedule, refetch: refetchSchedule, taskScheduleMap, unscheduledTaskIds, unscheduledReasons } = useSchedule(selectedScheduleDate)
+  const { schedule, loading: scheduleLoading, reschedule, refetch: refetchSchedule, taskScheduleMap, unscheduledTaskIds, unscheduledReasons, skipTaskForDate } = useSchedule(selectedScheduleDate)
   const { stats: gamificationStats, levelProgress, earnedBadges, unearnedBadges, loading: gamificationLoading, refetch: refetchGamification } = useGamification()
   const { lists } = useLists()
   const { activeGoals } = useGoals()
@@ -189,6 +190,12 @@ export function Dashboard() {
     setTaskFormOpen(true)
   }
 
+  const handleAddSubtask = (parentTask: Task) => {
+    setEditingTask(null)
+    setParentTaskId(parentTask.id)
+    setTaskFormOpen(true)
+  }
+
   const handleDeleteTask = async (id: string) => {
     if (confirm('Are you sure you want to delete this task?')) {
       await deleteTask(id)
@@ -226,6 +233,40 @@ export function Dashboard() {
     refetchSchedule()
     refetchTasks()  // Refresh tasks to get updated habit status (reset to 'todo')
     refetchGamification()
+  }
+
+  const handleUncompleteTask = async (id: string, forDate?: string) => {
+    // Reverse of handleCompleteTask — toggles the checkbox back off
+    await uncompleteTask(id, forDate ? { forDate } : undefined)
+
+    if (schedule && schedule.completed_tasks?.includes(id)) {
+      const currentCompleted = schedule.summary?.tasks_completed ?? 0
+      const currentRemaining = schedule.summary?.tasks_remaining ?? 0
+      const totalTasks = currentCompleted + currentRemaining
+      const newCompleted = Math.max(0, currentCompleted - 1)
+      const newRemaining = currentRemaining + 1
+
+      const updatedSchedule = {
+        ...schedule,
+        completed_tasks: (schedule.completed_tasks || []).filter(taskId => taskId !== id),
+        summary: {
+          ...schedule.summary,
+          tasks_completed: newCompleted,
+          tasks_remaining: newRemaining,
+          completion_rate: totalTasks > 0 ? (newCompleted / totalTasks) * 100 : 0,
+        },
+      }
+      await saveSchedule(updatedSchedule)
+    }
+
+    refetchSchedule()
+    refetchTasks()
+    refetchGamification()
+  }
+
+  const handleSkipTask = async (taskId: string, date: string) => {
+    await skipTaskForDate(taskId, date)
+    refetchSchedule()
   }
 
   const handleCloseXPNotification = () => {
@@ -367,6 +408,7 @@ export function Dashboard() {
     { id: 'notes' as ViewType, label: 'Notes', icon: FileText, muted: true },
     { id: 'journal' as ViewType, label: 'Journal', icon: BookOpen },
     { id: 'goals' as ViewType, label: 'Goals', icon: Target, badge: activeGoals.length, muted: true },
+    { id: 'financial' as ViewType, label: 'Financial', icon: Wallet },
     { id: 'paused' as ViewType, label: 'Paused', icon: PauseCircle, badge: totalPausedCount > 0 ? totalPausedCount : undefined },
   ]
 
@@ -385,7 +427,7 @@ export function Dashboard() {
   ]
 
   // Check if current view is in a dropdown
-  const isTasksView = ['tasks', 'projects', 'habits', 'project', 'habit', 'lists', 'list', 'notes', 'journal', 'goals', 'paused'].includes(currentView)
+  const isTasksView = ['tasks', 'projects', 'habits', 'project', 'habit', 'lists', 'list', 'notes', 'journal', 'goals', 'financial', 'paused'].includes(currentView)
   const isCalendarView = ['week', 'month'].includes(currentView)
   const isInsightsView = ['analytics', 'badges', 'mood', 'reviews'].includes(currentView)
 
@@ -397,6 +439,7 @@ export function Dashboard() {
     if (currentView === 'notes') return 'Notes'
     if (currentView === 'journal') return 'Journal'
     if (currentView === 'goals') return 'Goals'
+    if (currentView === 'financial') return 'Financial'
     if (currentView === 'paused') return 'Paused'
     if (currentView === 'tasks') return 'All Tasks'
     return 'Tasks'
@@ -694,6 +737,7 @@ export function Dashboard() {
         {currentView === 'notes' && <NotesView />}
         {currentView === 'journal' && <JournalView />}
         {currentView === 'goals' && <GoalsView />}
+        {currentView === 'financial' && <FinancialView />}
         {currentView === 'reviews' && <ReviewsView />}
 
         {/* Paused View */}
@@ -768,7 +812,10 @@ export function Dashboard() {
                           key={habit.id}
                           task={habit}
                           onComplete={handleCompleteTask}
+                          onUncomplete={handleUncompleteTask}
                           onEdit={handleEditTask}
+
+                          onAddSubtask={handleAddSubtask}
                           onDelete={handleDeleteTask}
                           subtasks={[]}
                           allTasks={tasks}
@@ -791,7 +838,10 @@ export function Dashboard() {
                           key={task.id}
                           task={task}
                           onComplete={handleCompleteTask}
+                          onUncomplete={handleUncompleteTask}
                           onEdit={handleEditTask}
+
+                          onAddSubtask={handleAddSubtask}
                           onDelete={handleDeleteTask}
                           subtasks={getSubtasks(task.id)}
                           allTasks={tasks}
@@ -811,6 +861,7 @@ export function Dashboard() {
             projectId={selectedProjectId}
             onBack={handleBackFromProject}
             onEditTask={handleEditTask}
+            onAddSubtask={handleAddSubtask}
             onEditProject={handleEditProject}
             onSelectProject={handleOpenProject}
           />
@@ -887,7 +938,10 @@ export function Dashboard() {
                     key={task.id}
                     task={task}
                     onComplete={handleCompleteTask}
+                    onUncomplete={handleUncompleteTask}
                     onEdit={handleEditTask}
+
+                    onAddSubtask={handleAddSubtask}
                     onDelete={handleDeleteTask}
                     subtasks={getSubtasks(task.id)}
                     allTasks={tasks}
@@ -1398,6 +1452,8 @@ export function Dashboard() {
             loading={scheduleLoading}
             onReschedule={handleReschedule}
             onCompleteTask={handleCompleteTask}
+            onUncompleteTask={handleUncompleteTask}
+            onSkipTask={handleSkipTask}
             onEditTask={handleEditTask}
             selectedDate={selectedScheduleDate}
             onDateChange={setSelectedScheduleDate}
@@ -1562,7 +1618,10 @@ export function Dashboard() {
                       key={task.id}
                       task={task}
                       onComplete={handleCompleteTask}
+                      onUncomplete={handleUncompleteTask}
                       onEdit={handleEditTask}
+
+                      onAddSubtask={handleAddSubtask}
                       onDelete={handleDeleteTask}
                       subtasks={getSubtasks(task.id)}
                       allTasks={tasks}
@@ -2108,7 +2167,10 @@ export function Dashboard() {
                   projects={projects}
                   allTasks={tasks}
                   onComplete={handleCompleteTask}
+                  onUncomplete={handleUncompleteTask}
                   onEdit={handleEditTask}
+
+                  onAddSubtask={handleAddSubtask}
                   onDelete={handleDeleteTask}
                   getSubtasks={getSubtasks}
                 />
@@ -2176,7 +2238,10 @@ export function Dashboard() {
                               key={habit.id}
                               task={habit}
                               onComplete={handleCompleteTask}
+                          onUncomplete={handleUncompleteTask}
                               onEdit={handleEditTask}
+
+                              onAddSubtask={handleAddSubtask}
                               onDelete={handleDeleteTask}
                               subtasks={[]}
                               allTasks={tasks}
@@ -2199,7 +2264,10 @@ export function Dashboard() {
                               key={task.id}
                               task={task}
                               onComplete={handleCompleteTask}
+                          onUncomplete={handleUncompleteTask}
                               onEdit={handleEditTask}
+
+                              onAddSubtask={handleAddSubtask}
                               onDelete={handleDeleteTask}
                               subtasks={getSubtasks(task.id)}
                               allTasks={tasks}
@@ -2404,7 +2472,10 @@ export function Dashboard() {
                                       <TaskCard
                                         task={habit}
                                         onComplete={handleCompleteTask}
+                          onUncomplete={handleUncompleteTask}
                                         onEdit={handleEditTask}
+
+                                        onAddSubtask={handleAddSubtask}
                                         onDelete={handleDeleteTask}
                                         subtasks={[]}
                                         allTasks={tasks}
@@ -2434,7 +2505,10 @@ export function Dashboard() {
                                       <TaskCard
                                         task={task}
                                         onComplete={handleCompleteTask}
+                          onUncomplete={handleUncompleteTask}
                                         onEdit={handleEditTask}
+
+                                        onAddSubtask={handleAddSubtask}
                                         onDelete={handleDeleteTask}
                                         subtasks={getSubtasks(task.id)}
                                         allTasks={tasks}

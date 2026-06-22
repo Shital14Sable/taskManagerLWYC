@@ -251,9 +251,64 @@ export function getCyclePhaseFromPrefs(prefs: { cycle?: CyclePreferences }): Cyc
 }
 
 /**
+ * Build a CyclePhaseInfo from raw calculation inputs. Internal helper.
+ */
+function buildPhaseInfo(
+  p: typeof PHASES[number],
+  cycleDay: number,
+  scaledStart: number,
+  scaledEnd: number,
+  isOverride: boolean,
+): CyclePhaseInfo {
+  return {
+    season: p.season,
+    name: p.name,
+    phase: p.phase,
+    dayRange: p.dayRange,
+    cycleDay,
+    daysInPhase: scaledEnd - scaledStart + 1,
+    daysRemainingInPhase: scaledEnd - cycleDay,
+    energyLevel: p.energyLevel,
+    emoji: p.emoji,
+    colorClass: p.colorClass,
+    invitation: p.invitation,
+    bestFor: p.bestFor,
+    howYouMightFeel: p.howYouMightFeel,
+    isOverride,
+  };
+}
+
+/**
+ * Compute phase from a known period-start reference date and cycle length.
+ */
+function phaseFromReference(
+  targetDate: Date,
+  periodStart: Date,
+  cycleLength: number,
+  isOverride: boolean,
+): CyclePhaseInfo | null {
+  const days = Math.floor((targetDate.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24));
+  if (days < 0) return null;
+  const cycleDay = (days % cycleLength) + 1;
+  const scale = cycleLength / 28;
+  for (const p of PHASES) {
+    const scaledStart = Math.max(1, Math.round(p.startDay * scale));
+    const scaledEnd = Math.round(p.endDay * scale);
+    if (cycleDay >= scaledStart && cycleDay <= scaledEnd) {
+      return buildPhaseInfo(p, cycleDay, scaledStart, scaledEnd, isOverride);
+    }
+  }
+  return null;
+}
+
+/**
  * Compute the cycle phase for an arbitrary calendar date.
- * Phase override only applies when the date is today; historical/future dates
- * always use the computed cycle position.
+ *
+ * Override anchor behaviour:
+ * When the user sets a manual phase_override and phase_override_start is recorded,
+ * that start date is treated as cycle day 1 of the override phase's nominal start.
+ * All dates on/after the anchor are recalculated from that anchor, so future phases
+ * flow correctly rather than staying frozen at the override value.
  */
 export function getCyclePhaseForDate(date: Date, prefs: CyclePreferences): CyclePhaseInfo | null {
   if (!prefs.enabled) return null;
@@ -264,47 +319,38 @@ export function getCyclePhaseForDate(date: Date, prefs: CyclePreferences): Cycle
   today.setHours(0, 0, 0, 0);
   const isToday = targetDate.getTime() === today.getTime();
 
-  // For today, delegate to getCyclePhase (which handles phase_override)
+  // For today, delegate to getCyclePhase (which handles phase_override display)
   if (isToday) return getCyclePhase(prefs);
 
-  // For other dates, compute from history, ignoring override
   const history = prefs.period_history ?? [];
-  const lastPeriodStart = getLastPeriodStart(history) ?? prefs.last_period_start ?? null;
-  if (!lastPeriodStart) return null;
-
   const computed = computeAverageCycleLength(history);
   const cycleLength = Math.max(21, Math.min(60, computed ?? prefs.average_cycle_length ?? 28));
-
-  const start = new Date(lastPeriodStart + 'T00:00:00');
-  const daysSinceStart = Math.floor((targetDate.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  if (daysSinceStart < 0) return null;
-
-  const cycleDay = (daysSinceStart % cycleLength) + 1;
   const scale = cycleLength / 28;
 
-  for (const p of PHASES) {
-    const scaledStart = Math.max(1, Math.round(p.startDay * scale));
-    const scaledEnd = Math.round(p.endDay * scale);
-    if (cycleDay >= scaledStart && cycleDay <= scaledEnd) {
-      return {
-        season: p.season,
-        name: p.name,
-        phase: p.phase,
-        dayRange: p.dayRange,
-        cycleDay,
-        daysInPhase: scaledEnd - scaledStart + 1,
-        daysRemainingInPhase: scaledEnd - cycleDay,
-        energyLevel: p.energyLevel,
-        emoji: p.emoji,
-        colorClass: p.colorClass,
-        invitation: p.invitation,
-        bestFor: p.bestFor,
-        howYouMightFeel: p.howYouMightFeel,
-        isOverride: false,
-      };
+  // If the user set a manual override with an anchor date, recalculate from that anchor
+  // for all dates on/after the anchor.
+  if (prefs.phase_override && prefs.phase_override_start) {
+    const overrideStart = new Date(prefs.phase_override_start + 'T00:00:00');
+    overrideStart.setHours(0, 0, 0, 0);
+
+    if (targetDate.getTime() >= overrideStart.getTime()) {
+      // Back-calculate an effective period-start date so that overrideStart
+      // corresponds to the nominal first day of the override phase.
+      const overridePhase = PHASES.find(p => p.season === prefs.phase_override);
+      if (overridePhase) {
+        const nominalPhaseStartDay = Math.max(1, Math.round(overridePhase.startDay * scale));
+        const effectivePeriodStart = new Date(overrideStart);
+        effectivePeriodStart.setDate(effectivePeriodStart.getDate() - (nominalPhaseStartDay - 1));
+        return phaseFromReference(targetDate, effectivePeriodStart, cycleLength, false);
+      }
     }
   }
-  return null;
+
+  // For past dates or when no override anchor: use period history
+  const lastPeriodStart = getLastPeriodStart(history) ?? prefs.last_period_start ?? null;
+  if (!lastPeriodStart) return null;
+  const refDate = new Date(lastPeriodStart + 'T00:00:00');
+  return phaseFromReference(targetDate, refDate, cycleLength, false);
 }
 
 export { PHASES as CYCLE_PHASES };
@@ -316,6 +362,67 @@ const WEEK_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'satu
  * sees a single flat energy block per day matching the current cycle phase energy.
  * Falls back to the stored energy_patterns when cycle is disabled or not configured.
  */
+// ─── Topological sort ────────────────────────────────────────────────────────
+
+/**
+ * Return tasks ordered so every dependency appears before the task that
+ * depends on it.  Only edges within the supplied task set are considered;
+ * external dependencies (tasks from other projects) are ignored.
+ * Tasks at the same dependency depth are ordered by priority descending.
+ */
+function topoSort(tasks: Task[]): Task[] {
+  const taskSet = new Set(tasks.map(t => t.id));
+
+  // adjacency: dep → [tasks that wait for dep]
+  const adj = new Map<string, string[]>();
+  const inDeg = new Map<string, number>();
+
+  for (const t of tasks) {
+    inDeg.set(t.id, 0);
+    adj.set(t.id, []);
+  }
+
+  for (const t of tasks) {
+    const localDeps = (t.dependencies ?? []).filter(d => taskSet.has(d));
+    inDeg.set(t.id, localDeps.length);
+    for (const dep of localDeps) {
+      adj.get(dep)!.push(t.id);
+    }
+  }
+
+  // Start with all tasks that have no local dependencies
+  const queue = tasks.filter(t => (inDeg.get(t.id) ?? 0) === 0)
+    .sort((a, b) => b.priority - a.priority);
+
+  const result: Task[] = [];
+  const processed = new Set<string>();
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => b.priority - a.priority);
+    const t = queue.shift()!;
+    result.push(t);
+    processed.add(t.id);
+
+    for (const waiterId of adj.get(t.id) ?? []) {
+      const deg = (inDeg.get(waiterId) ?? 1) - 1;
+      inDeg.set(waiterId, deg);
+      if (deg === 0) {
+        const waiterTask = tasks.find(x => x.id === waiterId);
+        if (waiterTask) queue.push(waiterTask);
+      }
+    }
+  }
+
+  // Append any tasks not yet processed (cycle in deps — treat as independent)
+  for (const t of tasks) {
+    if (!processed.has(t.id)) result.push(t);
+  }
+
+  return result;
+}
+
+// ─── Distribution result ──────────────────────────────────────────────────────
+
 /** Result of distributing project tasks across cycle-phase-appropriate days. */
 export interface TaskDistributionResult {
   taskId: string;
@@ -434,20 +541,20 @@ export function distributeCycleTasks(
   startDate: Date,
   deadlineDate: Date,
   prefs: UserPreferences,
-  maxTasksPerDay = 3,
+  maxTasksPerDay = 5,
 ): TaskDistributionResult[] {
   const today = new Date(startDate);
   today.setHours(0, 0, 0, 0);
-  const deadline = new Date(deadlineDate);
-  deadline.setHours(0, 0, 0, 0);
+  const projectDeadline = new Date(deadlineDate);
+  projectDeadline.setHours(0, 0, 0, 0);
 
-  if (deadline <= today || tasks.length === 0) return [];
+  if (projectDeadline <= today || tasks.length === 0) return [];
 
-  // Build every calendar day in [today, deadline] with its cycle season
+  // ── Build the full calendar [today, projectDeadline] with cycle seasons ──────
   type DayEntry = { date: string; season: CycleSeason | null };
   const allDays: DayEntry[] = [];
   const cur = new Date(today);
-  while (cur <= deadline) {
+  while (cur <= projectDeadline) {
     const dateStr = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
     let season: CycleSeason | null = null;
     if (prefs.cycle?.enabled) {
@@ -455,124 +562,119 @@ export function distributeCycleTasks(
         (!prefs.cycle.period_history || prefs.cycle.period_history.length === 0) && prefs.cycle.last_period_start
           ? { ...prefs.cycle, period_history: [prefs.cycle.last_period_start] }
           : prefs.cycle;
-      const phase = getCyclePhaseForDate(cur, effectiveCycle);
-      season = phase?.season ?? null;
+      season = getCyclePhaseForDate(cur, effectiveCycle)?.season ?? null;
     }
     allDays.push({ date: dateStr, season });
     cur.setDate(cur.getDate() + 1);
   }
-
   if (allDays.length === 0) return [];
 
-  const N = allDays.length;
-  const M = tasks.length;
+  const projectDeadlineStr = allDays[allDays.length - 1].date;
 
-  // Compute phase scores for each task
-  const phaseScores = tasks.map(t => scoreTaskForPhases(t));
+  // ── 1. Topological sort: schedule dependencies before dependents ──────────────
+  const sortedTasks = topoSort(tasks);
+  const M = sortedTasks.length;
 
-  // Sort tasks so those with the strongest phase preference are placed first
-  // (they get first pick of phase-appropriate slots before overflow).
-  // Within equal specificity, higher priority wins.
-  const taskOrder = tasks
-    .map((t, i) => ({
-      idx: i,
-      maxScore: Math.max(...Object.values(phaseScores[i])),
-      priority: t.priority,
-    }))
-    .sort((a, b) => b.maxScore - a.maxScore || b.priority - a.priority)
-    .map(x => x.idx);
+  // ── 2. Compute phase scores ───────────────────────────────────────────────────
+  const phaseScoreMap = new Map<string, PhaseScores>(
+    sortedTasks.map(t => [t.id, scoreTaskForPhases(t)])
+  );
 
-  // Ideal slot index for task at sorted position `orderPos` (0-based):
-  // Spreads M tasks evenly across N days.
-  const idealSlotFor = (orderPos: number) =>
-    M === 1 ? 0 : Math.round(orderPos * (N - 1) / (M - 1));
-
-  // Day capacity tracking
+  // ── 3. Helpers ────────────────────────────────────────────────────────────────
   const dateCount = new Map<string, number>();
+  // Track assigned date per task so dependents can use it as their earliest start
+  const assignedDate = new Map<string, string>();
 
-  // Find the best available day for a task, starting near `idealIdx`
-  // and searching outward. Scores a day by phase match - distance penalty.
-  const findBestDay = (
+  // Get effective deadline for a single task: min(project deadline, task deadline)
+  const effectiveDeadlineFor = (t: Task): string => {
+    if (!t.deadline) return projectDeadlineStr;
+    const td = t.deadline.split('T')[0];
+    return td < projectDeadlineStr ? td : projectDeadlineStr;
+  };
+
+  // Earliest allowed date for a task = day AFTER the latest dependency's assigned date
+  const earliestDateFor = (t: Task, todayStr: string): string => {
+    let earliest = todayStr;
+    for (const depId of (t.dependencies ?? [])) {
+      const depDate = assignedDate.get(depId);
+      if (!depDate) continue;
+      // Dependent must be assigned AFTER its dependency
+      const next = new Date(depDate + 'T00:00:00');
+      next.setDate(next.getDate() + 1);
+      const nextStr = `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}-${String(next.getDate()).padStart(2,'0')}`;
+      if (nextStr > earliest) earliest = nextStr;
+    }
+    return earliest;
+  };
+
+  // Find the best available day within a filtered window of allDays
+  const findBestInWindow = (
     scores: PhaseScores,
-    idealIdx: number,
-  ): { dayIdx: number; season: CycleSeason | 'any'; phaseScore: number } | null => {
-    // Search radius: up to the full timeline
-    const maxRadius = N;
+    window: DayEntry[],
+    idealPos: number,  // position within `window`
+  ): { entry: DayEntry; phaseScore: number } | null => {
+    const W = window.length;
+    if (W === 0) return null;
+    const clampedIdeal = Math.max(0, Math.min(W - 1, idealPos));
 
-    let bestDayIdx = -1;
-    let bestDayScore = -Infinity;
-    let bestSeason: CycleSeason | 'any' = 'any';
+    let bestScore = -Infinity;
+    let bestEntry: DayEntry | null = null;
     let bestPhaseScore = 0;
 
-    // Expand outward from ideal position
-    for (let radius = 0; radius <= maxRadius; radius++) {
-      // Check both directions (skip duplicate at radius=0)
-      const candidates =
-        radius === 0
-          ? [idealIdx]
-          : [idealIdx - radius, idealIdx + radius];
-
-      for (const dayIdx of candidates) {
-        if (dayIdx < 0 || dayIdx >= N) continue;
-        const day = allDays[dayIdx];
-        const cap = dateCount.get(day.date) ?? 0;
+    for (let radius = 0; radius <= W; radius++) {
+      const candidates = radius === 0 ? [clampedIdeal] : [clampedIdeal - radius, clampedIdeal + radius];
+      for (const idx of candidates) {
+        if (idx < 0 || idx >= W) continue;
+        const entry = window[idx];
+        const cap = dateCount.get(entry.date) ?? 0;
         if (cap >= maxTasksPerDay) continue;
 
-        const phaseMatch = day.season !== null ? scores[day.season] : 0;
-        // Distance penalty: each day away costs 2 points
-        const distancePenalty = radius * 2;
-        // Prefer days with more remaining capacity (lighter days get a bonus)
-        const capacityBonus = (maxTasksPerDay - cap) * 3;
+        const phaseMatch = entry.season !== null ? (scores[entry.season] ?? 0) : 0;
+        const score = phaseMatch - radius * 2 + (maxTasksPerDay - cap) * 3;
 
-        const totalScore = phaseMatch - distancePenalty + capacityBonus;
-
-        if (totalScore > bestDayScore) {
-          bestDayScore = totalScore;
-          bestDayIdx = dayIdx;
-          bestSeason = day.season ?? 'any';
+        if (score > bestScore) {
+          bestScore = score;
+          bestEntry = entry;
           bestPhaseScore = phaseMatch;
         }
       }
-
-      // Early exit: stop expanding once we've found a good match and
-      // the phase score won't improve further (phase bonus can't overcome distance)
-      if (bestDayIdx !== -1 && radius >= Math.ceil(N / M)) break;
+      if (bestEntry !== null && radius >= Math.max(1, Math.ceil(W / M))) break;
     }
 
-    if (bestDayIdx === -1) return null;
-    return { dayIdx: bestDayIdx, season: bestSeason, phaseScore: bestPhaseScore };
+    return bestEntry ? { entry: bestEntry, phaseScore: bestPhaseScore } : null;
   };
 
+  // ── 4. Assign each task in dependency order ───────────────────────────────────
+  const todayStr = allDays[0].date;
   const result: TaskDistributionResult[] = [];
 
-  for (let orderPos = 0; orderPos < taskOrder.length; orderPos++) {
-    const taskIdx = taskOrder[orderPos];
-    const task = tasks[taskIdx];
-    const scores = phaseScores[taskIdx];
-    const idealIdx = idealSlotFor(orderPos);
+  for (let orderPos = 0; orderPos < M; orderPos++) {
+    const task = sortedTasks[orderPos];
+    const scores = phaseScoreMap.get(task.id) ?? scoreTaskForPhases(task);
 
-    const best = findBestDay(scores, idealIdx);
+    const earliest  = earliestDateFor(task, todayStr);
+    const effective = effectiveDeadlineFor(task);
 
-    if (best) {
-      const day = allDays[best.dayIdx];
-      dateCount.set(day.date, (dateCount.get(day.date) ?? 0) + 1);
-      result.push({
-        taskId: task.id,
-        scheduledFor: day.date,
-        season: best.season,
-        phaseScore: Math.round(best.phaseScore),
-      });
-    } else {
-      // Absolute fallback: deadline day
-      const fallback = allDays[N - 1];
-      dateCount.set(fallback.date, (dateCount.get(fallback.date) ?? 0) + 1);
-      result.push({
-        taskId: task.id,
-        scheduledFor: fallback.date,
-        season: fallback.season ?? 'any',
-        phaseScore: 0,
-      });
-    }
+    // Build the valid window for this task
+    const window = allDays.filter(d => d.date >= earliest && d.date <= effective);
+
+    // Ideal position within the window, proportional to this task's position in the sorted list
+    const idealPos = window.length > 1
+      ? Math.round(orderPos * (window.length - 1) / Math.max(M - 1, 1))
+      : 0;
+
+    const best = findBestInWindow(scores, window, idealPos);
+
+    const chosen = best?.entry ?? window.at(-1) ?? allDays.at(-1)!;
+    dateCount.set(chosen.date, (dateCount.get(chosen.date) ?? 0) + 1);
+    assignedDate.set(task.id, chosen.date);
+
+    result.push({
+      taskId: task.id,
+      scheduledFor: chosen.date,
+      season: chosen.season ?? 'any',
+      phaseScore: Math.round(best?.phaseScore ?? 0),
+    });
   }
 
   return result;
