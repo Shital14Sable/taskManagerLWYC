@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Settings, Clock, Save, Download, Upload, FileJson, Trash2, AlertTriangle, Github, Cloud, LogOut, RefreshCw, Mail, BookOpen, Rocket, Eye, Moon, X, Plus, Briefcase } from 'lucide-react'
+import { Settings, Clock, Save, Download, Upload, FileJson, Trash2, AlertTriangle, Github, Cloud, LogOut, RefreshCw, Mail, BookOpen, Rocket, Eye, Moon, X, Plus, Briefcase, Sparkles, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,6 +26,8 @@ import { useHelpMode } from '@/context/HelpModeContext'
 import { Documentation } from '@/components/Documentation'
 import { getCyclePhaseFromPrefs, computeAverageCycleLength } from '@/utils/cycle'
 import type { CycleSeason } from '@/utils/cycle'
+import { getLLMConfig, saveLLMConfig, clearLLMConfig, PROVIDER_LABELS } from '@/lib/llm'
+import type { LLMProvider } from '@/lib/llm'
 
 interface DayWorkHours {
   start: string
@@ -93,6 +95,40 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
   const [newPeriodDate, setNewPeriodDate] = useState('')
   const [newOverrideDate, setNewOverrideDate] = useState('')
   const [newOverrideDateAdditional, setNewOverrideDateAdditional] = useState('')
+
+  // AI (BYOK) state
+  const [llmProviderInput, setLlmProviderInput] = useState<LLMProvider>('anthropic')
+  const [llmApiKeyInput, setLlmApiKeyInput] = useState('')
+  const [llmConfigured, setLlmConfigured] = useState(false)
+  const [llmConfiguredProvider, setLlmConfiguredProvider] = useState<LLMProvider | null>(null)
+  const [llmSaved, setLlmSaved] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      const config = getLLMConfig()
+      setLlmConfigured(!!config)
+      setLlmConfiguredProvider(config?.provider ?? null)
+      setLlmProviderInput(config?.provider ?? 'anthropic')
+      setLlmApiKeyInput('')
+      setLlmSaved(false)
+    }
+  }, [open])
+
+  const handleSaveLLMKey = () => {
+    if (!llmApiKeyInput.trim()) return
+    saveLLMConfig(llmProviderInput, llmApiKeyInput.trim())
+    setLlmConfigured(true)
+    setLlmConfiguredProvider(llmProviderInput)
+    setLlmApiKeyInput('')
+    setLlmSaved(true)
+  }
+
+  const handleClearLLMKey = () => {
+    clearLLMConfig()
+    setLlmConfigured(false)
+    setLlmConfiguredProvider(null)
+    setLlmSaved(false)
+  }
 
   // Sync handlers with error display
   const handleSync = async () => {
@@ -379,7 +415,7 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
 
         {preferences ? (
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-6">
               <TabsTrigger value="sync" className="gap-2">
                 <Cloud className="h-4 w-4" />
                 Sync
@@ -391,6 +427,10 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
               <TabsTrigger value="cycle" className="gap-2">
                 <Moon className="h-4 w-4" />
                 Cycle
+              </TabsTrigger>
+              <TabsTrigger value="ai" className="gap-2">
+                <Sparkles className="h-4 w-4" />
+                AI
               </TabsTrigger>
               <TabsTrigger value="data" className="gap-2">
                 <FileJson className="h-4 w-4" />
@@ -1051,6 +1091,75 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                   </CardContent>
                 </Card>
               )}
+            </TabsContent>
+
+            <TabsContent value="ai" className="space-y-4">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Sparkles className="h-4 w-4" />
+                    AI Task Suggestions
+                  </CardTitle>
+                  <CardDescription>
+                    Bring your own Anthropic or OpenAI API key to get AI-suggested task breakdowns for a project.
+                    The key is stored only in this browser (never synced to Drive/GitHub) and calls go
+                    directly from your browser to the provider — each call uses your own key and is billed
+                    to your own account, not ours.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {llmConfigured ? (
+                    <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                      <div className="flex items-center gap-2 text-sm">
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        {llmConfiguredProvider ? PROVIDER_LABELS[llmConfiguredProvider] : ''} API key saved
+                      </div>
+                      <Button variant="outline" size="sm" onClick={handleClearLLMKey}>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Remove
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <Label>Provider</Label>
+                        <Select value={llmProviderInput} onValueChange={(v) => setLlmProviderInput(v as LLMProvider)}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
+                            <SelectItem value="openai">OpenAI (ChatGPT)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>{PROVIDER_LABELS[llmProviderInput]} API Key</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            type="password"
+                            placeholder={llmProviderInput === 'openai' ? 'sk-...' : 'sk-ant-...'}
+                            value={llmApiKeyInput}
+                            onChange={(e) => setLlmApiKeyInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSaveLLMKey()}
+                          />
+                          <Button onClick={handleSaveLLMKey} disabled={!llmApiKeyInput.trim()}>
+                            Save
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {llmProviderInput === 'openai'
+                            ? 'Get a key at platform.openai.com → API Keys.'
+                            : 'Get a key at console.anthropic.com → Settings → API Keys.'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  {llmSaved && (
+                    <p className="text-xs text-green-600 dark:text-green-400">Key saved. You can now use "Suggest Tasks (AI)" on any project.</p>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
 
             {/* Data Tab (Export/Import) */}

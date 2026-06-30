@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { RefreshCw, Calendar, CheckCircle, Clock, Flame, Zap, Moon, Target, UtensilsCrossed, ChevronLeft, ChevronRight, FolderOpen, ListTodo, Repeat, Edit2, AlertCircle, CalendarX } from 'lucide-react'
+import { RefreshCw, Calendar, CheckCircle, Clock, Flame, Zap, Moon, Target, UtensilsCrossed, ChevronLeft, ChevronRight, FolderOpen, ListTodo, Repeat, Edit2, AlertCircle, CalendarX, Lock, Download } from 'lucide-react'
+import { buildICSForSchedule, downloadICS } from '@/lib/ics'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -200,6 +201,12 @@ export function TodayView({
     if (onDateChange) {
       onDateChange(todayDateStr)
     }
+  }
+
+  const handleDownloadICS = () => {
+    if (!schedule || schedule.scheduled_tasks.length === 0) return
+    const ics = buildICSForSchedule(currentDate, schedule.scheduled_tasks, tasks)
+    downloadICS(`trackmind-${currentDate}.ics`, ics)
   }
 
   const formatTime = (time: string) => {
@@ -648,6 +655,15 @@ export function TodayView({
             </div>
             <Button
               variant="outline"
+              onClick={handleDownloadICS}
+              disabled={!schedule || schedule.scheduled_tasks.length === 0}
+              title="Download this day's schedule as a calendar file (importable into Google Calendar)"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export to Calendar
+            </Button>
+            <Button
+              variant="outline"
               onClick={onReschedule}
               disabled={loading}
             >
@@ -858,7 +874,9 @@ export function TodayView({
                                   key={scheduled.task_id}
                                   className={cn(
                                     "group relative flex-1 min-w-[180px] rounded-md border p-2.5 cursor-pointer transition-all",
-                                    completed ? "bg-green-500/10 border-green-500/30" : "hover:shadow-sm",
+                                    completed
+                                      ? "bg-green-500/10 border-green-500/30"
+                                      : "bg-indigo-500/5 border-indigo-500/20 hover:shadow-sm",
                                     isTopPriority && !completed && "ring-1 ring-primary/40"
                                   )}
                                   style={{
@@ -871,11 +889,14 @@ export function TodayView({
                                     <span className={cn("font-medium text-sm truncate", completed && "line-through text-muted-foreground")}>
                                       {task?.title || 'Unknown Task'}
                                     </span>
-                                    {isTopPriority && !completed && (
-                                      <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-primary/40 text-primary shrink-0">
-                                        priority
-                                      </Badge>
-                                    )}
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <Lock className="h-3 w-3 text-indigo-500 dark:text-indigo-400" title="Fixed time" />
+                                      {isTopPriority && !completed && (
+                                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-primary/40 text-primary">
+                                          priority
+                                        </Badge>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                     <span className="font-mono">{formatTime(scheduled.start_time)}–{formatTime(scheduled.end_time)}</span>
@@ -978,6 +999,12 @@ export function TodayView({
                     today.setHours(0, 0, 0, 0)
                     const isOverdue = deadlineDate && deadlineDate < today
                     const isDeadlineToday = deadlineDate && deadlineDate.toDateString() === today.toDateString()
+                    // Immovable: a one-off meeting fixed to a specific date+time, or a
+                    // recurring habit/meeting that always occurs at a specific time.
+                    const isImmovable = !!task && (
+                      (task.is_pinned && task.pin_type === 'hard') ||
+                      (task.is_habit && !!task.recurrence?.time_of_day)
+                    )
 
                     return (
                       <div key={scheduled.task_id} className="relative overflow-hidden rounded-lg">
@@ -1005,6 +1032,8 @@ export function TodayView({
                               ? "bg-green-500/10 border-green-500/30"
                               : isPast
                               ? "bg-orange-500/5 border-orange-500/20 opacity-70"
+                              : isImmovable
+                              ? "bg-indigo-500/5 border-indigo-500/20 hover:bg-indigo-500/10"
                               : "hover:bg-accent hover:shadow-sm"
                           )}
                           style={{
@@ -1045,6 +1074,17 @@ export function TodayView({
                               )}>
                                 {task?.title || 'Unknown Task'}
                               </span>
+                              {/* Immovable: fixed-time meeting or recurring standing commitment */}
+                              {isImmovable && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs border-indigo-500/40 text-indigo-500 dark:text-indigo-400"
+                                  title="Fixed time — not moved by rescheduling"
+                                >
+                                  <Lock className="h-3 w-3 mr-1" />
+                                  Fixed
+                                </Badge>
+                              )}
                               {/* Show habit instance detail (e.g., "Lunch - Fried Rice") */}
                               {task?.is_habit && (
                                 <HabitInstanceBadge

@@ -3,7 +3,7 @@ import {
   ArrowLeft, Plus, Clock, Target, CheckCircle2, AlertCircle,
   Calendar, TrendingUp, Edit, Trash2, RefreshCw, ListTodo,
   Flame, Zap, Moon, MoreVertical, Play, Pause, Archive, Check,
-  FolderOpen, ChevronRight, Shuffle, ChevronDown, Link2, Lock
+  FolderOpen, ChevronRight, Shuffle, ChevronDown, Link2, Lock, Sparkles
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +33,7 @@ import { useApp } from '@/context/AppContext'
 import { useTasks } from '@/hooks/useTasks'
 import { useProjects } from '@/hooks/useProjects'
 import { distributeCycleTasks } from '@/utils/cycle'
+import { suggestTaskBreakdown, getLLMConfig, type SuggestedTask } from '@/lib/llm'
 import type { Project, Task } from '@/types'
 import { cn } from '@/lib/utils'
 import { v4 as uuidv4 } from 'uuid'
@@ -92,6 +94,11 @@ export function ProjectView({ projectId, onBack, onEditTask, onAddSubtask, onEdi
   const [unpausingSubprojects, setUnpausingSubprojects] = useState(false)
   const [editingDeadline, setEditingDeadline] = useState(false)
   const [deadlineInput, setDeadlineInput] = useState('')
+  const [showAIDialog, setShowAIDialog] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiSuggestions, setAiSuggestions] = useState<(SuggestedTask & { selected: boolean })[]>([])
+  const [addingAITasks, setAddingAITasks] = useState(false)
   const [distributing, setDistributing] = useState(false)
   const [distributeResult, setDistributeResult] = useState<{
     count: number
@@ -240,6 +247,62 @@ export function ProjectView({ projectId, onBack, onEditTask, onAddSubtask, onEdi
       console.error('Failed to create task:', error)
     } finally {
       setCreatingTask(false)
+    }
+  }
+
+  const handleOpenAIDialog = async () => {
+    setShowAIDialog(true)
+    setAiError(null)
+    setAiSuggestions([])
+    if (!getLLMConfig()) {
+      setAiError('No AI API key configured. Add one in Settings → AI.')
+      return
+    }
+    setAiLoading(true)
+    try {
+      const suggestions = await suggestTaskBreakdown({
+        projectName: project.name,
+        projectDescription: project.description,
+        deadline: project.deadline,
+      })
+      setAiSuggestions(suggestions.map(s => ({ ...s, selected: true })))
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : 'Failed to get AI suggestions')
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const handleAddSelectedAITasks = async () => {
+    const selected = aiSuggestions.filter(s => s.selected)
+    if (selected.length === 0) return
+    setAddingAITasks(true)
+    try {
+      const now = new Date().toISOString()
+      await Promise.all(selected.map(s => saveTask({
+        id: uuidv4(),
+        project_id: projectId,
+        title: s.title,
+        description: s.description ?? '',
+        priority: s.priority ?? 3,
+        difficulty: 3,
+        energy_level: 'medium',
+        estimated_minutes: s.estimated_minutes ?? 60,
+        actual_minutes: 0,
+        status: 'todo',
+        tags: [],
+        dependencies: [],
+        is_habit: false,
+        is_paused: false,
+        created_at: now,
+        updated_at: now,
+      })))
+      setShowAIDialog(false)
+      setAiSuggestions([])
+    } catch (error) {
+      console.error('Failed to add AI-suggested tasks:', error)
+    } finally {
+      setAddingAITasks(false)
     }
   }
 
@@ -456,6 +519,11 @@ export function ProjectView({ projectId, onBack, onEditTask, onAddSubtask, onEdi
         </div>
 
         <div className="flex items-start gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={handleOpenAIDialog} className="gap-2">
+            <Sparkles className="h-4 w-4" />
+            Suggest Tasks (AI)
+          </Button>
+
           {/* Cycle distribute button — shown when deadline is set */}
           {project.deadline && (
             <div className="flex flex-col items-end gap-1">
@@ -1115,6 +1183,76 @@ export function ProjectView({ projectId, onBack, onEditTask, onAddSubtask, onEdi
           </Card>
         </div>
       </div>
+
+      {/* AI Task Suggestions Dialog */}
+      <Dialog open={showAIDialog} onOpenChange={setShowAIDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              Suggested Tasks for "{project.name}"
+            </DialogTitle>
+            <DialogDescription>
+              AI-generated breakdown based on the project name and description. Review and pick the ones to add.
+            </DialogDescription>
+          </DialogHeader>
+
+          {aiLoading && (
+            <div className="flex items-center justify-center py-8 text-muted-foreground gap-2">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              Asking Claude for suggestions…
+            </div>
+          )}
+
+          {aiError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-md">
+              <p className="text-sm text-red-600 dark:text-red-400">{aiError}</p>
+            </div>
+          )}
+
+          {!aiLoading && !aiError && aiSuggestions.length > 0 && (
+            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+              {aiSuggestions.map((s, i) => (
+                <div key={i} className="flex items-start gap-2 p-2 rounded border">
+                  <Checkbox
+                    checked={s.selected}
+                    onCheckedChange={(checked) => {
+                      setAiSuggestions(prev => prev.map((p, idx) => idx === i ? { ...p, selected: !!checked } : p))
+                    }}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{s.title}</p>
+                    {s.description && (
+                      <p className="text-xs text-muted-foreground mt-0.5">{s.description}</p>
+                    )}
+                    <div className="flex items-center gap-2 mt-1">
+                      {s.estimated_minutes && (
+                        <Badge variant="outline" className="text-[10px]">{s.estimated_minutes}m</Badge>
+                      )}
+                      {s.priority && (
+                        <Badge variant="outline" className="text-[10px]">{priorityLabels[s.priority]}</Badge>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAIDialog(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddSelectedAITasks}
+              disabled={addingAITasks || aiSuggestions.filter(s => s.selected).length === 0}
+            >
+              {addingAITasks ? 'Adding…' : `Add Selected (${aiSuggestions.filter(s => s.selected).length})`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
