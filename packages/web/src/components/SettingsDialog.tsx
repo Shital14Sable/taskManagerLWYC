@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import type { UserPreferences, OfficeHoursDay } from '@trackmind/core'
 import { useApp } from '@/context/AppContext'
@@ -26,7 +27,7 @@ import { useHelpMode } from '@/context/HelpModeContext'
 import { Documentation } from '@/components/Documentation'
 import { getCyclePhaseFromPrefs, computeAverageCycleLength } from '@/utils/cycle'
 import type { CycleSeason } from '@/utils/cycle'
-import { getLLMConfig, saveLLMConfig, clearLLMConfig, PROVIDER_LABELS } from '@/lib/llm'
+import { getLLMConfig, saveLLMConfig, clearLLMConfig, PROVIDER_LABELS, getLLMRules, saveLLMRules } from '@/lib/llm'
 import type { LLMProvider } from '@/lib/llm'
 
 interface DayWorkHours {
@@ -96,29 +97,59 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
   const [newOverrideDate, setNewOverrideDate] = useState('')
   const [newOverrideDateAdditional, setNewOverrideDateAdditional] = useState('')
 
-  // AI (BYOK) state
+  // AI (BYOK / local) state
   const [llmProviderInput, setLlmProviderInput] = useState<LLMProvider>('anthropic')
   const [llmApiKeyInput, setLlmApiKeyInput] = useState('')
+  const [llmOllamaHost, setLlmOllamaHost] = useState('http://localhost:11434')
+  const [llmOllamaModel, setLlmOllamaModel] = useState('llama3.1')
   const [llmConfigured, setLlmConfigured] = useState(false)
   const [llmConfiguredProvider, setLlmConfiguredProvider] = useState<LLMProvider | null>(null)
+  const [llmConfiguredModel, setLlmConfiguredModel] = useState('')
+  const [llmConfiguredHost, setLlmConfiguredHost] = useState('')
   const [llmSaved, setLlmSaved] = useState(false)
+  const [llmRulesInput, setLlmRulesInput] = useState('')
+  const [llmRulesSaved, setLlmRulesSaved] = useState(false)
 
   useEffect(() => {
     if (open) {
       const config = getLLMConfig()
       setLlmConfigured(!!config)
       setLlmConfiguredProvider(config?.provider ?? null)
+      setLlmConfiguredModel(config?.model ?? '')
+      setLlmConfiguredHost(config?.host ?? '')
       setLlmProviderInput(config?.provider ?? 'anthropic')
       setLlmApiKeyInput('')
+      if (config?.provider === 'ollama') {
+        setLlmOllamaHost(config.host || 'http://localhost:11434')
+        setLlmOllamaModel(config.model || 'llama3.1')
+      } else {
+        setLlmOllamaHost('http://localhost:11434')
+        setLlmOllamaModel('llama3.1')
+      }
       setLlmSaved(false)
+      setLlmRulesInput(getLLMRules())
+      setLlmRulesSaved(false)
     }
   }, [open])
 
   const handleSaveLLMKey = () => {
+    if (llmProviderInput === 'ollama') {
+      const host = llmOllamaHost.trim() || 'http://localhost:11434'
+      const model = llmOllamaModel.trim() || 'llama3.1'
+      saveLLMConfig('ollama', '', model, host)
+      setLlmConfigured(true)
+      setLlmConfiguredProvider('ollama')
+      setLlmConfiguredModel(model)
+      setLlmConfiguredHost(host)
+      setLlmSaved(true)
+      return
+    }
     if (!llmApiKeyInput.trim()) return
     saveLLMConfig(llmProviderInput, llmApiKeyInput.trim())
     setLlmConfigured(true)
     setLlmConfiguredProvider(llmProviderInput)
+    setLlmConfiguredModel('')
+    setLlmConfiguredHost('')
     setLlmApiKeyInput('')
     setLlmSaved(true)
   }
@@ -127,7 +158,15 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
     clearLLMConfig()
     setLlmConfigured(false)
     setLlmConfiguredProvider(null)
+    setLlmConfiguredModel('')
+    setLlmConfiguredHost('')
     setLlmSaved(false)
+  }
+
+  const handleSaveLLMRules = () => {
+    saveLLMRules(llmRulesInput)
+    setLlmRulesSaved(true)
+    setTimeout(() => setLlmRulesSaved(false), 2000)
   }
 
   // Sync handlers with error display
@@ -1101,10 +1140,9 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                     AI Task Suggestions
                   </CardTitle>
                   <CardDescription>
-                    Bring your own Anthropic or OpenAI API key to get AI-suggested task breakdowns for a project.
-                    The key is stored only in this browser (never synced to Drive/GitHub) and calls go
-                    directly from your browser to the provider — each call uses your own key and is billed
-                    to your own account, not ours.
+                    Use a local Ollama model or bring your own Anthropic / OpenAI API key to get AI-suggested
+                    task breakdowns. Keys are stored only in this browser (never synced) and calls go directly
+                    from your browser to the provider.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -1112,7 +1150,9 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                     <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                       <div className="flex items-center gap-2 text-sm">
                         <CheckCircle2 className="h-4 w-4 text-green-500" />
-                        {llmConfiguredProvider ? PROVIDER_LABELS[llmConfiguredProvider] : ''} API key saved
+                        {llmConfiguredProvider === 'ollama'
+                          ? `Ollama · ${llmConfiguredModel} · ${llmConfiguredHost}`
+                          : `${llmConfiguredProvider ? PROVIDER_LABELS[llmConfiguredProvider] : ''} API key saved`}
                       </div>
                       <Button variant="outline" size="sm" onClick={handleClearLLMKey}>
                         <Trash2 className="h-4 w-4 mr-2" />
@@ -1128,36 +1168,115 @@ export function SettingsDialog({ onRestartWizard }: SettingsDialogProps) {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="ollama">Ollama (Local)</SelectItem>
                             <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
                             <SelectItem value="openai">OpenAI (ChatGPT)</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="space-y-2">
-                        <Label>{PROVIDER_LABELS[llmProviderInput]} API Key</Label>
-                        <div className="flex gap-2">
-                          <Input
-                            type="password"
-                            placeholder={llmProviderInput === 'openai' ? 'sk-...' : 'sk-ant-...'}
-                            value={llmApiKeyInput}
-                            onChange={(e) => setLlmApiKeyInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSaveLLMKey()}
-                          />
-                          <Button onClick={handleSaveLLMKey} disabled={!llmApiKeyInput.trim()}>
-                            Save
-                          </Button>
+
+                      {llmProviderInput === 'ollama' ? (
+                        <>
+                          <div className="space-y-2">
+                            <Label>Ollama Host</Label>
+                            <Input
+                              type="url"
+                              placeholder="http://localhost:11434"
+                              value={llmOllamaHost}
+                              onChange={(e) => setLlmOllamaHost(e.target.value)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Model</Label>
+                            <div className="flex gap-2">
+                              <Input
+                                type="text"
+                                placeholder="llama3.1"
+                                value={llmOllamaModel}
+                                onChange={(e) => setLlmOllamaModel(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleSaveLLMKey()}
+                              />
+                              <Button onClick={handleSaveLLMKey}>
+                                Save
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Enter the model name exactly as shown in <code className="font-mono bg-muted px-1 rounded">ollama list</code>.
+                            </p>
+                          </div>
+                          <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1.5">
+                            <p className="font-medium text-foreground">CORS note</p>
+                            <p>Your browser calls Ollama directly, so Ollama must allow this origin. If you see a network error, restart Ollama with:</p>
+                            <code className="block bg-background rounded px-2 py-1 font-mono break-all">
+                              OLLAMA_ORIGINS=http://localhost:5173 ollama serve
+                            </code>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-2">
+                          <Label>{PROVIDER_LABELS[llmProviderInput]} API Key</Label>
+                          <div className="flex gap-2">
+                            <Input
+                              type="password"
+                              placeholder={llmProviderInput === 'openai' ? 'sk-...' : 'sk-ant-...'}
+                              value={llmApiKeyInput}
+                              onChange={(e) => setLlmApiKeyInput(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && handleSaveLLMKey()}
+                            />
+                            <Button onClick={handleSaveLLMKey} disabled={!llmApiKeyInput.trim()}>
+                              Save
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {llmProviderInput === 'openai'
+                              ? 'Get a key at platform.openai.com → API Keys.'
+                              : 'Get a key at console.anthropic.com → Settings → API Keys.'}
+                          </p>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          {llmProviderInput === 'openai'
-                            ? 'Get a key at platform.openai.com → API Keys.'
-                            : 'Get a key at console.anthropic.com → Settings → API Keys.'}
-                        </p>
-                      </div>
+                      )}
                     </div>
                   )}
                   {llmSaved && (
-                    <p className="text-xs text-green-600 dark:text-green-400">Key saved. You can now use "Suggest Tasks (AI)" on any project.</p>
+                    <p className="text-xs text-green-600 dark:text-green-400">
+                      {llmConfiguredProvider === 'ollama'
+                        ? `Ollama configured. You can now use "Suggest Tasks (AI)" on any project.`
+                        : `Key saved. You can now use "Suggest Tasks (AI)" on any project.`}
+                    </p>
                   )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Sparkles className="h-4 w-4" />
+                    Suggestion Rules
+                  </CardTitle>
+                  <CardDescription>
+                    These instructions are always included in the AI prompt when suggesting tasks.
+                    Write one rule per line.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Textarea
+                    placeholder={`- Always include a testing or review task\n- Keep task durations under 2 hours (120 min)\n- Add a documentation task at the end\n- Prioritise based on deadline urgency`}
+                    value={llmRulesInput}
+                    onChange={(e) => setLlmRulesInput(e.target.value)}
+                    className="min-h-[120px] text-sm font-mono resize-y"
+                  />
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">
+                      {llmRulesInput.trim().split('\n').filter(l => l.trim()).length} rule{llmRulesInput.trim().split('\n').filter(l => l.trim()).length !== 1 ? 's' : ''}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      {llmRulesSaved && (
+                        <span className="text-xs text-green-600 dark:text-green-400">Saved</span>
+                      )}
+                      <Button size="sm" onClick={handleSaveLLMRules}>
+                        Save Rules
+                      </Button>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>

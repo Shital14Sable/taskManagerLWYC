@@ -4,23 +4,39 @@
 // the provider using the user's own key, so there's no server-side cost to us.
 
 const STORAGE_KEY = 'trackmind_llm_config'
+const RULES_STORAGE_KEY = 'trackmind_llm_rules'
 
-export type LLMProvider = 'anthropic' | 'openai'
+export function getLLMRules(): string {
+  return localStorage.getItem(RULES_STORAGE_KEY) ?? ''
+}
+
+export function saveLLMRules(rules: string): void {
+  if (rules.trim()) {
+    localStorage.setItem(RULES_STORAGE_KEY, rules)
+  } else {
+    localStorage.removeItem(RULES_STORAGE_KEY)
+  }
+}
+
+export type LLMProvider = 'anthropic' | 'openai' | 'ollama'
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
   anthropic: 'claude-3-5-haiku-20241022',
   openai: 'gpt-4o-mini',
+  ollama: 'llama3.1',
 }
 
 const PROVIDER_LABELS: Record<LLMProvider, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  ollama: 'Ollama (Local)',
 }
 
 export interface LLMConfig {
   provider: LLMProvider
   apiKey: string
   model: string
+  host?: string  // Ollama only; default: http://localhost:11434
 }
 
 export function getLLMConfig(): LLMConfig | null {
@@ -28,16 +44,30 @@ export function getLLMConfig(): LLMConfig | null {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    if (!parsed?.apiKey) return null
-    const provider: LLMProvider = parsed.provider === 'openai' ? 'openai' : 'anthropic'
-    return { provider, apiKey: parsed.apiKey, model: parsed.model || DEFAULT_MODELS[provider] }
+    const provider: LLMProvider =
+      parsed.provider === 'openai' ? 'openai' :
+      parsed.provider === 'ollama' ? 'ollama' :
+      'anthropic'
+    // Ollama doesn't require an API key
+    if (provider !== 'ollama' && !parsed?.apiKey) return null
+    return {
+      provider,
+      apiKey: parsed.apiKey ?? '',
+      model: parsed.model || DEFAULT_MODELS[provider],
+      host: parsed.host,
+    }
   } catch {
     return null
   }
 }
 
-export function saveLLMConfig(provider: LLMProvider, apiKey: string, model: string = DEFAULT_MODELS[provider]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ provider, apiKey, model }))
+export function saveLLMConfig(
+  provider: LLMProvider,
+  apiKey: string,
+  model: string = DEFAULT_MODELS[provider],
+  host?: string
+): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ provider, apiKey, model, host }))
 }
 
 export function clearLLMConfig(): void {
@@ -51,12 +81,16 @@ export interface SuggestedTask {
   priority?: number
 }
 
-function buildPrompt(input: { projectName: string; projectDescription?: string | null; deadline?: string | null }): string {
+function buildPrompt(
+  input: { projectName: string; projectDescription?: string | null; deadline?: string | null },
+  rules?: string
+): string {
   return [
     `Break the following project down into 5-10 concrete, actionable tasks.`,
     `Project: ${input.projectName}`,
     input.projectDescription ? `Description: ${input.projectDescription}` : '',
     input.deadline ? `Deadline: ${input.deadline}` : '',
+    rules?.trim() ? `\nAdditional rules — always follow these:\n${rules.trim()}` : '',
     '',
     'Respond with ONLY a JSON array (no markdown, no prose, no code fences) of objects shaped exactly like:',
     '[{"title": string, "description": string, "estimated_minutes": number, "priority": number}]',
@@ -118,6 +152,30 @@ async function callOpenAI(config: LLMConfig, prompt: string): Promise<string> {
   return data?.choices?.[0]?.message?.content ?? ''
 }
 
+async function callOllama(config: LLMConfig, prompt: string): Promise<string> {
+  const host = (config.host || 'http://localhost:11434').replace(/\/$/, '')
+  const response = await fetch(`${host}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [{ role: 'user', content: prompt }],
+      stream: false,
+    }),
+  })
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Model "${config.model}" not found in Ollama. Run: ollama pull ${config.model}`)
+    }
+    const text = await response.text().catch(() => '')
+    throw new Error(`Ollama error (${response.status}): ${text.slice(0, 200)}`)
+  }
+
+  const data = await response.json()
+  return data?.message?.content ?? ''
+}
+
 export async function suggestTaskBreakdown(input: {
   projectName: string
   projectDescription?: string | null
@@ -125,13 +183,15 @@ export async function suggestTaskBreakdown(input: {
 }): Promise<SuggestedTask[]> {
   const config = getLLMConfig()
   if (!config) {
-    throw new Error('No AI API key configured. Add one in Settings → AI.')
+    throw new Error('No AI provider configured. Add one in Settings → AI.')
   }
 
-  const prompt = buildPrompt(input)
-  const text = config.provider === 'openai'
-    ? await callOpenAI(config, prompt)
-    : await callAnthropic(config, prompt)
+  const rules = getLLMRules()
+  const prompt = buildPrompt(input, rules || undefined)
+  const text =
+    config.provider === 'openai' ? await callOpenAI(config, prompt) :
+    config.provider === 'ollama' ? await callOllama(config, prompt) :
+    await callAnthropic(config, prompt)
 
   const jsonMatch = text.match(/\[[\s\S]*\]/)
   if (!jsonMatch) {

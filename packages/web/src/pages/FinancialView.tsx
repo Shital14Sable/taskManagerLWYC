@@ -23,13 +23,34 @@ const PALETTE = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function currentMonthStr(): string {
+function calendarMonthStr(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function monthLabel(ym: string): string {
-  const [y, m] = ym.split('-')
+// Returns the current period identifier: ISO date of the most recent period
+// start when cycle mode is on, otherwise falls back to YYYY-MM.
+function getCurrentPeriodId(preferences: import('@trackmind/core').UserPreferences | null | undefined): string {
+  if (preferences?.cycle?.enabled) {
+    const history = [...(preferences.cycle.period_history ?? [])].sort()
+    if (history.length > 0) return history[history.length - 1]
+  }
+  return calendarMonthStr()
+}
+
+// Label for a period identifier: date range for cycle IDs, month name for YYYY-MM.
+function monthLabel(id: string, cycleLength = 28): string {
+  // Cycle id: "YYYY-MM-DD"
+  if (/^\d{4}-\d{2}-\d{2}$/.test(id)) {
+    const start = new Date(id + 'T00:00:00')
+    const end = new Date(id + 'T00:00:00')
+    end.setDate(end.getDate() + cycleLength - 1)
+    const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const endLabel = end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return `${startLabel} – ${endLabel}`
+  }
+  // Calendar month: "YYYY-MM"
+  const [y, m] = id.split('-')
   return new Date(Number(y), Number(m) - 1, 1)
     .toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 }
@@ -90,9 +111,9 @@ function fmt(n: number): string {
 
 // ─── Excel export ─────────────────────────────────────────────────────────────
 
-function exportToExcel(buckets: FinancialBucket[], monthYM: string) {
+function exportToExcel(buckets: FinancialBucket[], periodId: string, cycleLength = 28) {
   const wb = XLSX.utils.book_new()
-  const label = monthLabel(monthYM)
+  const label = monthLabel(periodId, cycleLength)
 
   // ── Summary sheet ──
   const summaryData: (string | number)[][] = [
@@ -156,7 +177,7 @@ function exportToExcel(buckets: FinancialBucket[], monthYM: string) {
     XLSX.utils.book_append_sheet(wb, sheet, sheetName || 'Bucket')
   }
 
-  XLSX.writeFile(wb, `TrackMind_Financial_${monthYM}.xlsx`)
+  XLSX.writeFile(wb, `TrackMind_Financial_${periodId}.xlsx`)
 }
 
 // ─── Entries panel ────────────────────────────────────────────────────────────
@@ -516,12 +537,14 @@ export function FinancialView() {
   const grandTotal = useMemo(() => totals.reduce((s, t) => s + t, 0), [totals])
   const posTotal   = useMemo(() => totals.filter(t => t > 0).reduce((s, t) => s + t, 0), [totals])
 
-  // ── Month tracking ────────────────────────────────────────────────────────────
-  const current = currentMonthStr()
+  // ── Period tracking (cycle-aware) ─────────────────────────────────────────────
+  // "current" is the cycle start date when cycle mode is on, or YYYY-MM otherwise.
+  const cycleLength = preferences?.cycle?.average_cycle_length ?? 28
+  const current = getCurrentPeriodId(preferences)
   const storedMonth = preferences?.financial_current_month ?? current
   const isNewMonth = storedMonth !== current && buckets.some(b => (b.entries ?? []).length > 0)
 
-  // On first load with existing buckets, record the current month if not set
+  // On first load with existing buckets, record the current period if not set
   useEffect(() => {
     if (!preferences) return
     if (!preferences.financial_current_month && buckets.length > 0) {
@@ -538,11 +561,11 @@ export function FinancialView() {
     })
   }
 
-  // ── Close month: export Excel → clear entries → advance month ─────────────────
+  // ── Close month: export Excel → clear entries → start new period ──────────────
   const handleCloseMonth = async (monthToClose = storedMonth) => {
     setClosingMonth(true)
     try {
-      exportToExcel(buckets, monthToClose)
+      exportToExcel(buckets, monthToClose, cycleLength)
       // Clear all entries from all buckets, keep structure intact
       const cleared = buckets.map(b => ({ ...b, entries: [], amount: 0, updated_at: new Date().toISOString() }))
       await save(cleared, current)
@@ -588,8 +611,8 @@ export function FinancialView() {
           <div className="flex-1 min-w-0">
             <p className="font-medium text-sm">A new month has started</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {monthLabel(storedMonth)} data is ready to export. Click <strong>Close Month</strong> to download
-              the Excel report and start {monthLabel(current)} with a clean slate.
+              {monthLabel(storedMonth, cycleLength)} data is ready to export. Click <strong>Close Month</strong> to download
+              the Excel report and start {monthLabel(current, cycleLength)} with a clean slate.
             </p>
           </div>
           <Button
@@ -614,7 +637,7 @@ export function FinancialView() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
-                  Total · {monthLabel(storedMonth)}
+                  Total · {monthLabel(storedMonth, cycleLength)}
                 </p>
                 <p className={cn('text-3xl font-bold tabular-nums', grandTotal < 0 && 'text-destructive')}>
                   {fmt(grandTotal)}
@@ -640,7 +663,7 @@ export function FinancialView() {
           className="gap-2 shrink-0"
           onClick={() => handleCloseMonth(storedMonth)}
           disabled={closingMonth}
-          title={`Export ${monthLabel(storedMonth)} to Excel and start a new month`}
+          title={`Export ${monthLabel(storedMonth, cycleLength)} to Excel and start a new period`}
         >
           <Download className="h-4 w-4" />
           {closingMonth ? 'Exporting…' : 'Close Month'}

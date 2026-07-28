@@ -1,4 +1,4 @@
-import type { ScheduledTask, Task } from '@trackmind/core'
+import type { ScheduledTask, Task, Schedule } from '@trackmind/core'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -27,11 +27,13 @@ function escapeICSText(text: string): string {
     .replace(/\n/g, '\\n')
 }
 
-export function buildICSForSchedule(date: string, scheduledTasks: ScheduledTask[], tasks: Task[]): string {
+const dtstampNow = (): string => {
   const now = new Date()
-  const dtstamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`
+  return `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`
+}
 
-  const events = scheduledTasks
+function buildVEvents(date: string, scheduledTasks: ScheduledTask[], tasks: Task[], dtstamp: string): string[] {
+  return scheduledTasks
     .filter(st => !st.is_buffer)
     .map(st => {
       const task = tasks.find(t => t.id === st.task_id)
@@ -56,7 +58,9 @@ export function buildICSForSchedule(date: string, scheduledTasks: ScheduledTask[
       lines.push('END:VEVENT')
       return lines.join('\r\n')
     })
+}
 
+function wrapVCalendar(events: string[]): string {
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -65,6 +69,44 @@ export function buildICSForSchedule(date: string, scheduledTasks: ScheduledTask[
     ...events,
     'END:VCALENDAR',
   ].join('\r\n')
+}
+
+export function buildICSForSchedule(date: string, scheduledTasks: ScheduledTask[], tasks: Task[]): string {
+  return wrapVCalendar(buildVEvents(date, scheduledTasks, tasks, dtstampNow()))
+}
+
+export function buildICSForDateRange(
+  startDate: string,
+  endDate: string,
+  schedules: Map<string, Schedule>,
+  tasks: Task[]
+): string {
+  const dtstamp = dtstampNow()
+  const events: string[] = []
+
+  for (const [date, schedule] of schedules) {
+    if (date < startDate || date > endDate) continue
+    if (!schedule.scheduled_tasks?.length) continue
+    events.push(...buildVEvents(date, schedule.scheduled_tasks, tasks, dtstamp))
+  }
+
+  return wrapVCalendar(events)
+}
+
+export function buildICSForMonth(
+  year: number,
+  month: number,
+  schedules: Map<string, Schedule>,
+  tasks: Task[]
+): string {
+  const mm = String(month).padStart(2, '0')
+  const lastDay = new Date(year, month, 0).getDate()
+  return buildICSForDateRange(
+    `${year}-${mm}-01`,
+    `${year}-${mm}-${String(lastDay).padStart(2, '0')}`,
+    schedules,
+    tasks
+  )
 }
 
 export function downloadICS(filename: string, icsContent: string): void {
